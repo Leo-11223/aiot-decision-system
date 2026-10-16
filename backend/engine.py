@@ -111,19 +111,101 @@ class Engine:
         return r
 
     # ------------------------------------------------------------ 時間序列
-    def series(self, sid, cols, at=None, hours=72):
+    def series(self, sid, cols, at=None, hours=72, step=1):
+        """取「當下時間」往前 hours 小時的資料；step>1 時每 step 小時彙整成平均、最小、最大值。"""
         t = self.resolve_time(sid, at)
         s = self.sites[sid]
         start = t - pd.Timedelta(hours=hours - 1)
         cols = [c for c in cols if c in s["df"].columns]
         df = s["df"].loc[start:t, cols]
         trust = s["trust"].loc[start:t, [c for c in cols if c in s["trust"].columns]]
-        return jsonable({
-            "site_id": sid, "at": t, "t": [x for x in df.index],
-            "values": {c: df[c].tolist() for c in cols},
-            "trust": {c: trust[c].tolist() for c in trust.columns},
-            "thresholds": SITES[sid].get("thresholds", {}),
-        })
+        out = {"site_id": sid, "at": t, "step": step, "thresholds": SITES[sid].get("thresholds", {})}
+        if step > 1:
+            rule = f"{step}h"
+            g = df.resample(rule, origin=start)
+            mean, lo, hi = g.mean(), g.min(), g.max()
+            tg = trust.resample(rule, origin=start).mean()
+            out.update({"t": list(mean.index), "values": {c: mean[c].tolist() for c in cols},
+                        "min": {c: lo[c].tolist() for c in cols}, "max": {c: hi[c].tolist() for c in cols},
+                        "trust": {c: tg[c].tolist() for c in tg.columns}})
+        else:
+            out.update({"t": list(df.index), "values": {c: df[c].tolist() for c in cols},
+                        "trust": {c: trust[c].tolist() for c in trust.columns}})
+        return jsonable(out)
+
+    # ------------------------------------------------------------ 時間軸事件標記（拉條上的點）
+    INDICATOR = {
+        "sheep": ("成羊區 THI", "", [74, 79, 84], False),
+        "expert": ("DO 共識值", "mg/L", [4, 3, 2], True),
+        "river": ("DO（48h 中位數）", "mg/L", [6.5, 4.6, 2.0], True),
+        "breed1": ("PM2.5（24h 平均）", "µg/m³", [15.5, 35.5, 54.5], False),
+        "breed1_north": ("PM2.5（24h 平均）", "µg/m³", [15.5, 35.5, 54.5], False),
+        "northeast": ("PM2.5（24h 平均）", "µg/m³", [15.5, 35.5, 54.5], False),
+        "site": ("PM10", "µg/m³", [126, 255, 355], False),
+    }
+
+    def indicator(self, sid):
+        """每小時的主指標（與快照中的等級判斷一致），只用該時間點以前的資料。"""
+        s = self.sites[sid]
+        c, t = s["clean"], s["trust"]
+        if sid == "sheep":
+            return c["thi"]
+        if sid == "expert":
+            cols = s["cfg"]["groups"]["DO"]
+            ok = c[cols].where(t[cols] >= 80)
+            return ok.median(axis=1)
+        if sid == "river":
+            return s["df"]["do"].rolling(48, min_periods=12).median()
+        if sid == "site":
+            return c["pm10"]
+        return c["pm25"].rolling(24, min_periods=6).mean()
+
+    def timeline(self, sid):
+        key = ("timeline", sid)
+        if key in self._cache:
+            return self._cache[key]
+        s = self.sites[sid]
+        label, unit, cuts, low_bad = self.INDICATOR[sid]
+        v = self.indicator(sid)
+        lvl = v.apply(lambda x: -1 if pd.isna(x) else A.level_of(x, cuts, lower_is_bad=low_bad))
+        events = []
+
+        def runs(mask):
+            out, start = [], None
+            for ts, m in mask.items():
+                if m and start is None:
+                    start = ts
+                if not m and start is not None:
+                    out.append((start, prev))
+                    start = None
+                prev = ts
+            if start is not None:
+                out.append((start, prev))
+            return out
+
+        for a, b in runs(lvl >= 2):
+            peak = int(lvl.loc[a:b].max())
+            events.append({"type": A.LEVEL_NAME[peak], "start": a, "end": b,
+                           "hours": int((b - a) / pd.Timedelta(hours=1)) + 1})
+        for e in self.anomalies[sid]["events"]:
+            if e["hours"] >= 3:
+                events.append({"type": "異常", "start": e["start"], "end": e["end"], "hours": e["hours"],
+                               "detail": "、".join(e["vars"])})
+        # 長期失效的感測器（全期平均可信度 <50）已有專門診斷，不在時間軸上重複標記
+        tr = s["trust"][[k for k in s["trust"].columns if s["trust"][k].mean() >= 50]]
+        low = (tr.min(axis=1) < 50) & s["raw"].notna().any(axis=1)
+        for a, b in runs(low):
+            h = int((b - a) / pd.Timedelta(hours=1)) + 1
+            if h >= 3:
+                bad = tr.loc[a:b].mean()
+                events.append({"type": "感測器", "start": a, "end": b, "hours": h,
+                               "detail": "、".join(bad[bad < 50].index[:3])})
+        events.sort(key=lambda e: e["start"])
+        r = jsonable({"site_id": sid, "start": v.index[0], "end": v.index[-1], "label": label, "unit": unit,
+                      "cuts": cuts, "lower_is_bad": low_bad,
+                      "value": v.round(2).tolist(), "level": lvl.astype(int).tolist(), "events": events})
+        self._cache[key] = r
+        return r
 
     def columns(self, sid):
         s = self.sites[sid]

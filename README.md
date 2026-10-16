@@ -62,6 +62,20 @@ py -m uvicorn backend.main:app --reload
 | PATCH | `/api/work-orders/{id}` | 更新工單狀態：待派工／處理中／已完成 |
 | GET | `/api/feedback` | 動作成效驗證結果 |
 
+另有 `GET /api/sites/{site_id}/timeline`（整段期間每小時等級與事件標記，時間拉條用），`series` 可加 `step` 參數把資料彙整成每 N 小時的平均、最小、最大值。
+
+### 前端介面（React + TypeScript + Vite）
+
+先啟動後端，再開第二個終端機：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+瀏覽器開 http://localhost:5173 。總覽列出 7 個場域；點進場域頁，可用時間拉條（可調刻度、顯示範圍、播放速度）回放任一時間點，核准或駁回決策、更新工單狀態。網址會記住時間點，例如 `#/site/sheep?at=2026-07-20T14:00`，可以直接分享給隊友。
+
 所有查詢都可以加 `at` 指定「當下時間」（例如 `at=2026-07-20T14:00`），系統只使用該時間點以前的資料、只用訓練期的模型，回放時不會偷看未來。場域 id：`sheep`、`expert`、`river`、`breed1`、`breed1_north`、`northeast`、`site`。審核與工單狀態存在 `outputs/aiot.db`（SQLite）。
 
 ## 四、誠實的限制

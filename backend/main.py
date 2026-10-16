@@ -98,11 +98,18 @@ def site_snapshot(site_id: str, at: Optional[str] = Query(None, description=AT_D
 @app.get("/api/sites/{site_id}/series", tags=["場域"], summary="時間序列（畫即時曲線用）")
 def site_series(site_id: str,
                 vars: Optional[str] = Query(None, description="逗號分隔的欄位，例如 thi,temp_avg；不填 = 關鍵欄位"),
-                hours: int = Query(72, ge=1, le=24 * 60, description="往前取幾小時"),
+                hours: int = Query(72, ge=1, le=24 * 200, description="往前取幾小時"),
+                step: int = Query(1, ge=1, le=24 * 7, description="彙整刻度（小時）；>1 時回傳每格的平均、最小、最大值"),
                 at: Optional[str] = Query(None, description=AT_DOC)):
     check_site(site_id)
     cols = vars.split(",") if vars else SITES[site_id]["key"]
-    return eng().series(site_id, cols, at, hours)
+    return eng().series(site_id, cols, at, hours, step)
+
+
+@app.get("/api/sites/{site_id}/timeline", tags=["場域"], summary="整段期間的主指標、每小時等級與事件標記（時間拉條用）")
+def site_timeline(site_id: str):
+    check_site(site_id)
+    return eng().timeline(site_id)
 
 
 @app.get("/api/sites/{site_id}/columns", tags=["場域"], summary="可查詢的欄位")

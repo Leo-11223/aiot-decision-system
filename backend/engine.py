@@ -51,6 +51,22 @@ class Engine:
         # 暖機：以各場域最後時間跑一次，訓練並快取所有模型
         for sid in self.sites:
             self.snapshot(sid)
+            self.timeline(sid)
+
+    # ------------------------------------------------------------ 預先訓練的模型存檔（部署用）
+    # 部署時先在打包階段訓練好並存檔，雲端主機啟動時只需讀檔，不必重新訓練。
+    def __getstate__(self):
+        st = dict(self.__dict__)
+        st.pop("_lock", None)  # 執行緒鎖無法存檔
+        st["_model_cache"] = (A._FC_CACHE, A._MOTOR_CACHE)  # 已訓練模型放在模組層級，一起存
+        return st
+
+    def __setstate__(self, st):
+        fc, motor = st.pop("_model_cache", ({}, {}))
+        A._FC_CACHE.update(fc)
+        A._MOTOR_CACHE.update(motor)
+        self.__dict__.update(st)
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------ 時間
     def time_range(self, sid):

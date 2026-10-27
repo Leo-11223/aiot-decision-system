@@ -37,24 +37,6 @@ export const SITE_CHART: Record<string, { vars: string[]; labels: Record<string,
   site: { vars: ['pm10'], labels: { pm10: 'PM10' }, unit: 'µg/m³', fcVar: 'pm10' },
 }
 
-export const OPERATOR_KEY = 'aiot-operator'
-
-export function getOperator(): string {
-  try {
-    return localStorage.getItem(OPERATOR_KEY) || '值班人員'
-  } catch {
-    return '值班人員'
-  }
-}
-
-export function setOperator(name: string): void {
-  try {
-    localStorage.setItem(OPERATOR_KEY, name)
-  } catch {
-    /* 無法儲存時忽略 */
-  }
-}
-
 // 感測器欄位代碼 → 中文名稱
 const SENSOR_LABELS: Record<string, string> = {
   thi: '成羊區 THI', thi_lamb: '仔羊區 THI', temp: '溫度', rh: '濕度', co2: 'CO2', nh3: 'NH3',

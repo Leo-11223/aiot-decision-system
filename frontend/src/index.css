@@ -225,3 +225,81 @@ main { max-width: 1440px; margin: 0 auto; padding: 24px 24px 64px; }
 .trust em { font-style: normal; font-family: var(--num); font-size: 15px; text-align: right; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------- 執行回饋 ---------- */
+.reject-form { display: flex; gap: 6px; width: 100%; margin-top: 4px; }
+.reject-form input { flex: 1; min-width: 0; font-size: 13px; }
+.outcomes, .rules { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.outcomes li, .rules li { border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: var(--radius); padding: 8px 12px; background: var(--panel-2); }
+.oc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.oc-head b { font-weight: 500; }
+.oc-status { font-size: 12px; font-weight: 700; padding: 0 6px; border-radius: 3px; color: #0b1422; background: var(--muted); }
+.oc-line { font-size: 13px; }
+.oc-line.muted, .oc-field { color: var(--muted); font-size: 13px; }
+.oc-field.warn { color: var(--lvl-1); }
+.oc-field.ok { color: var(--lvl-0); }
+.oc-tracking { border-left-color: var(--accent) !important; }
+.oc-tracking .oc-status { background: var(--accent); }
+.oc-done { border-left-color: var(--lvl-0) !important; }
+.oc-done .oc-status { background: var(--lvl-0); }
+.oc-missed { border-left-color: var(--lvl-2) !important; }
+.oc-missed .oc-status { background: var(--lvl-2); }
+.oc-rejected { border-left-color: var(--lvl-3) !important; }
+.oc-rejected .oc-status { background: var(--lvl-3); }
+.rules li.flag { border-left-color: var(--lvl-3); }
+.rules li.flag .oc-status { background: var(--lvl-3); }
+.progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin: 6px 0 4px; }
+.progress b { display: block; height: 100%; }
+.feedback .site-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 1100px) { .feedback .site-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- 登入與帳號 ---------- */
+.center { text-align: center; padding-top: 30vh; }
+.login { min-height: 70vh; display: grid; place-items: center; }
+.login-card {
+  width: min(380px, 100%); display: grid; gap: 14px; background: var(--panel);
+  border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--radius); padding: 28px 26px;
+}
+.login-card h1 { font-size: 22px; color: var(--accent); }
+.login-card label, .form label, .new-user label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.login-card input, .form input { width: 100%; padding: 8px 10px; }
+.login-card .primary { padding: 8px; }
+.notice { color: var(--lvl-1); font-size: 13px; }
+.success { color: var(--lvl-0); padding: 4px 0; }
+
+.whoami { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.whoami a { text-decoration: none; padding: 4px 8px; border-radius: var(--radius); }
+.whoami a:hover, .whoami a.active { background: var(--panel-2); }
+.role-tag { font-size: 11px; margin-left: 6px; padding: 0 6px; border-radius: 3px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+.role-tag.admin { color: var(--accent); border-color: var(--accent); }
+
+.account h1, .admin h1 { font-size: 24px; }
+.form { display: grid; gap: 12px; max-width: 420px; margin-top: 16px; }
+.admin { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+.admin > * { min-width: 0; }
+
+.table-wrap { overflow-x: auto; }
+table.audit { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.audit th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.audit td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.audit .nowrap { white-space: nowrap; }
+table.audit .muted, .muted { color: var(--muted); }
+table.audit tr.inactive td { opacity: 0.5; }
+.act { font-weight: 500; }
+.act-approve .act { color: var(--lvl-0); }
+.act-reject .act { color: var(--lvl-3); }
+.act-work_order .act { color: var(--accent); }
+.act-login_failed .act { color: var(--lvl-1); }
+.row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.row-actions form { display: flex; gap: 6px; }
+.row-actions input { width: 120px; padding: 3px 8px; }
+.row-actions button, table.audit select { font-size: 12px; padding: 3px 8px; }
+
+.new-user { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.new-user h3 { font-size: 15px; margin-bottom: 10px; }
+.new-user-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+.new-user input, .new-user select { width: 100%; }
+
+@media (max-width: 640px) {
+  .whoami { order: 2; margin-left: auto; }
+}

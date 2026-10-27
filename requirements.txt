@@ -1,5 +1,6 @@
-pandas
-numpy
-scikit-learn
-fastapi
-uvicorn[standard]
+# 固定版本，確保本機（Python 3.9）與雲端（Python 3.11）結果一致
+pandas==2.2.3
+numpy==2.0.2
+scikit-learn==1.6.1
+fastapi==0.115.6
+uvicorn[standard]==0.34.0

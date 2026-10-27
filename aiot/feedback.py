@@ -1,6 +1,8 @@
 """05 執行回饋：從羊舍的實際設備動作紀錄，驗證「動作 → 環境變化」的成效，
 並把結果寫回成效資料庫（effect_db），供決策引擎下一輪使用（持續學習）。"""
 import json
+
+from .config import MIN_SAMPLES, Z_ONE_SIDED
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +35,7 @@ def action_effect(raw: pd.DataFrame, df: pd.DataFrame, mask: pd.Series, name: st
     diff = diff.dropna()
     eff = float(diff.mean()) if len(diff) else None
     se = float(diff.std(ddof=1) / np.sqrt(len(diff))) if len(diff) > 1 else None
-    verified = bool(len(diff) >= 5 and eff is not None and eff < 0 and se is not None and eff + 1.0 * se < 0)
+    verified = bool(len(diff) >= MIN_SAMPLES and eff is not None and se is not None and eff + Z_ONE_SIDED * se < 0)
     return {"action": name, "n": int(len(diff)), "effect": eff, "se": se, "verified": verified,
             "target": target, "note": "負值=動作後 THI 比同時段平常多降（或少升）"}
 
@@ -95,6 +97,6 @@ def verify_expert(site: dict) -> dict:
     level_gap = float(np.nanmedian(lvl_stop.values - lvl_run_same)) if len(lvl_stop) else None
     days = (df.index[-1] - df.index[0]).days or 1
     return {"n": int(len(diff)), "effect": eff, "se": se, "level_gap_same_hour": level_gap,
-            "verified": bool(level_gap is not None and level_gap < -0.1 and len(lvl_stop) >= 30),
+            "verified": bool(level_gap is not None and level_gap < -0.1 and len(lvl_stop) >= MIN_SAMPLES),
             "do_stop": float(df.loc[stop, "do1"].median()), "do_run": float(df.loc[run, "do1"].median()),
             "stop_hours_per_day": float(stop.sum() / days)}

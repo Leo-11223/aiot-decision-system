@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../api'
-import type { Decision, Series, Snapshot, Timeline } from '../api'
+import { api, feedbackApi } from '../api'
+import type { Decision, Outcome, Series, Snapshot, Timeline } from '../api'
 import { DecisionList } from '../components/DecisionList'
+import { OutcomeList } from '../components/OutcomeList'
 import { LineChart } from '../components/LineChart'
 import type { ChartSeries } from '../components/LineChart'
 import { TimeBar } from '../components/TimeBar'
-import { HOUR, SITE_CHART, fmtNum, fmtTime, getOperator, levelVar, sensorLabel, toApi, toMs } from '../util'
+import { HOUR, SITE_CHART, fmtNum, fmtTime, levelVar, sensorLabel, toApi, toMs } from '../util'
 
 const SERIES_COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)']
 const WO_STATUS = ['待派工', '處理中', '已完成']
@@ -22,6 +23,7 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
   const [showEvents, setShowEvents] = useState<Set<string>>(new Set(['緊急', '危險', '感測器']))
   const [snap, setSnap] = useState<Snapshot | null>(null)
   const [series, setSeries] = useState<Series | null>(null)
+  const [outcomes, setOutcomes] = useState<Outcome[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const reqId = useRef(0)
@@ -62,13 +64,15 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
       setLoading(true)
       try {
         const atStr = toApi(at)
-        const [s, ser] = await Promise.all([
+        const [s, ser, oc] = await Promise.all([
           api.snapshot(siteId, atStr),
           api.series(siteId, chart.vars, windowH, aggStep, atStr),
+          feedbackApi.outcomes(siteId, atStr),
         ])
         if (id !== reqId.current) return // 已有更新的請求，丟掉舊結果
         setSnap(s)
         setSeries(ser)
+        setOutcomes(oc)
         setError(null)
       } catch (e) {
         if (id === reqId.current) setError((e as Error).message)
@@ -105,14 +109,14 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
     return () => window.clearInterval(t)
   }, [playing, speed, step, end, timeline])
 
-  const onReview = async (d: Decision, action: 'approve' | 'reject') => {
-    await api.review(d.id, action, getOperator())
+  const onReview = async (d: Decision, action: 'approve' | 'reject', note?: string) => {
+    await api.review(d.id, action, note)
     if (cursor !== null) await load(cursor)
   }
 
   const onWorkOrder = async (id: string, status: string) => {
     try {
-      await api.setWorkOrder(id, status, getOperator())
+      await api.setWorkOrder(id, status)
       if (cursor !== null) await load(cursor)
     } catch (e) {
       setError((e as Error).message)
@@ -252,6 +256,12 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
           <section className="panel">
             <h2>現在該做什麼</h2>
             {snap ? <DecisionList decisions={snap.decisions} onReview={onReview} /> : <p className="empty">載入中</p>}
+          </section>
+
+          <section className="panel">
+            <h2>執行回饋</h2>
+            <p className="hint">依目前的時間點評估。按播放往後走，可以看到追蹤中的核准變成達成或未達成。</p>
+            <OutcomeList outcomes={outcomes} />
           </section>
 
           <section className="panel">

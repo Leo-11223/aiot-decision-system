@@ -7,19 +7,23 @@ import { modeClass } from '../util'
 
 type Props = {
   decisions: Decision[]
-  onReview: (d: Decision, action: 'approve' | 'reject') => Promise<void>
+  onReview: (d: Decision, action: 'approve' | 'reject', note?: string) => Promise<void>
 }
 
 export function DecisionList({ decisions, onReview }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [rejecting, setRejecting] = useState<string | null>(null)
+  const [reason, setReason] = useState('')
   const sorted = [...decisions].sort((a, b) => a.優先 - b.優先)
 
-  const act = async (d: Decision, action: 'approve' | 'reject') => {
+  const act = async (d: Decision, action: 'approve' | 'reject', note?: string) => {
     setBusy(d.id + action)
     setError(null)
     try {
-      await onReview(d, action)
+      await onReview(d, action, note)
+      setRejecting(null)
+      setReason('')
     } catch (e) {
       setError(`沒有送出：${(e as Error).message}`)
     } finally {
@@ -93,10 +97,30 @@ export function DecisionList({ decisions, onReview }: Props) {
                 <button className="primary" disabled={busy !== null} onClick={() => act(d, 'approve')}>
                   {busy === d.id + 'approve' ? '送出中' : d.審核 ? '重新核准' : '核准'}
                 </button>
-                <button disabled={busy !== null} onClick={() => act(d, 'reject')}>
-                  {busy === d.id + 'reject' ? '送出中' : '駁回'}
+                <button disabled={busy !== null} onClick={() => setRejecting(rejecting === d.id ? null : d.id)} aria-expanded={rejecting === d.id}>
+                  駁回
                 </button>
               </div>
+            )}
+            {rejecting === d.id && (
+              <form
+                className="reject-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  act(d, 'reject', reason.trim() || undefined)
+                }}
+              >
+                <input
+                  autoFocus
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="駁回原因，例如：現場有雨、設備維修中"
+                  aria-label="駁回原因"
+                />
+                <button type="submit" disabled={busy !== null}>
+                  {busy === d.id + 'reject' ? '送出中' : '確認駁回'}
+                </button>
+              </form>
             )}
           </footer>
         </article>

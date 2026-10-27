@@ -364,3 +364,5 @@ FodyWeavers.xsd
 env/
 node_modules/
 outputs/aiot.db
+outputs/engine.pkl
+outputs/initial_admin.txt

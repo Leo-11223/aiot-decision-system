@@ -76,7 +76,29 @@ npm run dev
 
 瀏覽器開 http://localhost:5173 。總覽列出 7 個場域；點進場域頁，可用時間拉條（可調刻度、顯示範圍、播放速度）回放任一時間點，核准或駁回決策、更新工單狀態。網址會記住時間點，例如 `#/site/sheep?at=2026-07-20T14:00`，可以直接分享給隊友。
 
+### 執行回饋（閉環）
+
+`GET /api/feedback/outcomes` 依「當下時間」評估每筆核准：目標是否在期限內達成，並比對設備紀錄確認現場是否真的有執行；現場未執行的核准不計入成效樣本。`GET /api/feedback/rules` 統計每條規則的核准／駁回與成效驗證進度：動作需累積 30 個樣本且單尾 95% 顯著（效果 + 1.645 × 標準誤 < 0）才升級為自動執行；被審核 3 次以上且駁回率 ≥ 50% 的規則標為「建議檢討」。門檻在 `aiot/config.py` 調整。前端對應場域頁的「執行回饋」面板與 `#/feedback` 頁。
+
 所有查詢都可以加 `at` 指定「當下時間」（例如 `at=2026-07-20T14:00`），系統只使用該時間點以前的資料、只用訓練期的模型，回放時不會偷看未來。場域 id：`sheep`、`expert`、`river`、`breed1`、`breed1_north`、`northeast`、`site`。審核與工單狀態存在 `outputs/aiot.db`（SQLite）。
+
+## 登入與權限
+
+所有頁面與 API 都要登入。員工可以看資料、核准／駁回決策、更新工單；管理員另外有「管理」頁，可查看操作紀錄（登入、核准、駁回與原因、工單狀態變更、帳號異動、登入失敗）並新增、停用帳號或重設密碼。密碼以 PBKDF2 加鹽雜湊儲存，連續輸錯 5 次鎖 5 分鐘。
+
+第一次啟動會自動建立管理員帳號 `admin`：有設定環境變數 `ADMIN_PASSWORD` 就用它，否則隨機產生，印在後端啟動訊息並存到 `outputs/initial_admin.txt`。其他環境變數見 `backend/auth.py` 開頭說明（`SECRET_KEY`、`ADMIN_USERNAME`、`SEED_USERS`）。
+
+## 部署（Render 免費方案）
+
+`Dockerfile` 把前端網頁與後端 API 包成同一個服務，並在打包時先訓練好模型（`python -m backend.warm` 產生 `outputs/engine.pkl`），雲端主機啟動時只需讀檔（本機實測 1.8 秒，記憶體約 240 MB）。伺服器會先開啟連線埠、在背景載入，載入期間網頁顯示「系統啟動中」。
+
+1. 在 render.com 用 GitHub 帳號登入，New → Web Service，選這個儲存庫（私人儲存庫可以）。
+2. Language 選 Docker，Instance Type 選 Free，Advanced 的 Health Check Path 填 `/api/health`。
+3. 建立後等它打包（含訓練模型），完成後會得到 `https://<名稱>.onrender.com`。
+
+部署到 Render 時，在 Environment 設定 `SECRET_KEY`（任意長亂碼）、`ADMIN_PASSWORD`，以及 `SEED_USERS`（例如 `amy,初始密碼,staff,王小美;bob,初始密碼,staff,陳大明`）。免費方案重啟會清空資料庫，靠這些變數每次自動建回帳號。
+
+免費方案的限制：15 分鐘沒人使用會休眠，下次開啟約需 1 至 2 分鐘喚醒；檔案系統不保存，重新啟動後審核紀錄會清空；CPU 只有 0.1 核，切換時間點會比本機慢。Demo 前幾分鐘先打開網址喚醒。網址任何人都能開啟，資料與核准功能沒有登入保護。
 
 ## 四、誠實的限制
 

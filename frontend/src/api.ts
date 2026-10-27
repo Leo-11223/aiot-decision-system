@@ -1,7 +1,8 @@
-// 後端 API 呼叫與資料型別。後端預設跑在 http://127.0.0.1:8000
+// 後端 API 呼叫與資料型別。
+// 開發時（npm run dev）後端在 http://127.0.0.1:8000；部署時前後端同網域，用相對路徑。
 // 要改位址：在 frontend 資料夾建立 .env 檔，寫入 VITE_API_URL=http://你的位址
 
-export const API_BASE: string = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000'
+export const API_BASE: string = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://127.0.0.1:8000' : '')
 
 export type Range = { start: string; end: string }
 
@@ -127,11 +128,45 @@ export type Series = {
   trust: Record<string, (number | null)[]>
 }
 
+// ---------- 登入憑證 ----------
+const TOKEN_KEY = 'aiot-token'
+let memToken: string | null = null
+
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? memToken
+  } catch {
+    return memToken
+  }
+}
+
+export function setToken(t: string | null): void {
+  memToken = t
+  try {
+    if (t) localStorage.setItem(TOKEN_KEY, t)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* 無法儲存時只放在記憶體 */
+  }
+}
+
+// 任何請求收到 401（未登入或已過期）都會觸發這個事件，App 收到後回到登入頁
+export const UNAUTHORIZED_EVENT = 'aiot-unauthorized'
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken()
   const res = await fetch(API_BASE + path, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   })
+  if (res.status === 401 && !path.startsWith('/api/auth/login')) {
+    setToken(null)
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+  }
   if (!res.ok) {
     let detail = `${res.status}`
     try {
@@ -154,20 +189,100 @@ const q = (params: Record<string, string | number | undefined>) => {
 }
 
 export const api = {
-  health: () => request<{ status: string }>('/api/health'),
+  health: () => request<{ status: 'ok' | 'loading' | 'error'; error: string | null }>('/api/health'),
   sites: (at?: string) => request<SiteSummary[]>('/api/sites' + q({ at })),
   snapshot: (id: string, at?: string) => request<Snapshot>(`/api/sites/${id}` + q({ at })),
   timeline: (id: string) => request<Timeline>(`/api/sites/${id}/timeline`),
   series: (id: string, vars: string[], hours: number, step: number, at?: string) =>
     request<Series>(`/api/sites/${id}/series` + q({ vars: vars.join(','), hours, step, at })),
-  review: (decisionId: string, action: 'approve' | 'reject', operator: string, note?: string) =>
+  review: (decisionId: string, action: 'approve' | 'reject', note?: string) =>
     request<{ review_id: number }>(`/api/decisions/${decisionId}/review`, {
       method: 'POST',
-      body: JSON.stringify({ action, operator, note }),
+      body: JSON.stringify({ action, note }),
     }),
-  setWorkOrder: (woId: string, status: string, operator: string) =>
+  setWorkOrder: (woId: string, status: string) =>
     request<WorkOrderStatus>(`/api/work-orders/${woId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status, operator }),
+      body: JSON.stringify({ status }),
     }),
+}
+
+export type Outcome = {
+  review_id: number
+  decision_id: string
+  site_id: string
+  設備: string
+  動作: string
+  核准時間: string
+  審核: 'approve' | 'reject'
+  操作人: string | null
+  備註: string | null
+  狀態: '追蹤中' | '達成' | '未達成' | '已駁回' | '無量化目標'
+  說明: string
+  目標?: string
+  期限?: string
+  現場執行?: boolean | null
+  現場紀錄?: string
+  樣本?: string
+  最新值?: number | null
+  達成時間?: string
+  歷時?: number
+}
+
+export type RuleStat = {
+  site_id: string
+  場域: string | null
+  設備: string
+  核准: number
+  駁回: number
+  駁回率: number
+  建議檢討: boolean
+  駁回原因: string[]
+  成效?: { 動作: string; 樣本數: number; 門檻: number; 效果: number | null; 標準誤: number | null; 已驗證: boolean }
+}
+
+export type RuleReport = { rules: RuleStat[]; 門檻: { 樣本數: number; 單尾z: number; 檢討最少審核次數: number } }
+
+export const feedbackApi = {
+  outcomes: (siteId?: string, at?: string) => request<Outcome[]>('/api/feedback/outcomes' + q({ site_id: siteId, at })),
+  rules: () => request<RuleReport>('/api/feedback/rules'),
+}
+
+// ---------- 帳號與管理員 ----------
+export type User = { username: string; display_name: string; role: 'staff' | 'admin'; role_name: string }
+
+export type AdminUser = User & {
+  active: boolean
+  created_at: string
+  last_login: string | null
+  counts: { approve: number; reject: number; work_order: number }
+}
+
+export type AuditEntry = {
+  id: number
+  ts: string
+  username: string | null
+  display_name: string | null
+  role: string | null
+  action: string
+  site_id: string | null
+  target: string | null
+  detail: Record<string, string | number | null>
+}
+
+export const authApi = {
+  login: (username: string, password: string) =>
+    request<{ token: string; user: User }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  me: () => request<User>('/api/auth/me'),
+  changePassword: (old_password: string, new_password: string) =>
+    request<{ ok: boolean }>('/api/auth/password', { method: 'POST', body: JSON.stringify({ old_password, new_password }) }),
+}
+
+export const adminApi = {
+  audit: (username?: string, action?: string) => request<AuditEntry[]>('/api/admin/audit' + q({ username, action, limit: 500 })),
+  users: () => request<AdminUser[]>('/api/admin/users'),
+  createUser: (body: { username: string; display_name: string; password: string; role: string }) =>
+    request<{ ok: boolean }>('/api/admin/users', { method: 'POST', body: JSON.stringify(body) }),
+  updateUser: (username: string, body: { display_name?: string; role?: string; active?: boolean; password?: string }) =>
+    request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(username)}`, { method: 'PATCH', body: JSON.stringify(body) }),
 }

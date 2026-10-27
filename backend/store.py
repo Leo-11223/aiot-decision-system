@@ -1,9 +1,12 @@
-"""SQLite 紀錄：人工核准／駁回決策、工單狀態。這就是閉環中「人工確認」與「派工」的落地紀錄。"""
+"""SQLite 紀錄：人工核准／駁回決策、工單狀態、帳號、操作紀錄。
+這就是閉環中「人工確認」與「派工」的落地紀錄，也是管理員稽核的依據。"""
 import json
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+TZ = timezone(timedelta(hours=8))  # 紀錄一律用台灣時間（雲端主機預設是 UTC）
 
 DB_PATH = Path(__file__).resolve().parent.parent / "outputs" / "aiot.db"
 WO_STATUS = ["待派工", "處理中", "已完成"]
@@ -25,12 +28,20 @@ class Store:
             CREATE TABLE IF NOT EXISTS work_orders (
                 wo_id TEXT PRIMARY KEY, site_id TEXT, title TEXT, status TEXT NOT NULL,
                 operator TEXT, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY, display_name TEXT NOT NULL, role TEXT NOT NULL,
+                password_hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL, last_login TEXT);
+            CREATE TABLE IF NOT EXISTS audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+                username TEXT, display_name TEXT, role TEXT,
+                action TEXT NOT NULL, site_id TEXT, target TEXT, detail_json TEXT);
             """)
             self.conn.commit()
 
     @staticmethod
     def _now():
-        return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        return datetime.now(TZ).strftime("%Y-%m-%dT%H:%M:%S")
 
     # ------------------------------------------------------------ 決策審核
     def add_review(self, decision_id, site_id, at, action, operator, note, decision):
@@ -76,3 +87,65 @@ class Store:
                 (wo_id, site_id, title, status, operator, self._now()))
             self.conn.commit()
         return self.wo_status(wo_id)
+
+    # ------------------------------------------------------------ 帳號
+    def get_user(self, username):
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        return dict(row) if row else None
+
+    def list_users(self):
+        with self.lock:
+            rows = self.conn.execute("SELECT username, display_name, role, active, created_at, last_login "
+                                     "FROM users ORDER BY role, username").fetchall()
+        return [dict(r) for r in rows]
+
+    def create_user(self, username, display_name, role, password_hash):
+        with self.lock:
+            self.conn.execute("INSERT INTO users(username, display_name, role, password_hash, active, created_at) "
+                              "VALUES (?,?,?,?,1,?)", (username, display_name, role, password_hash, self._now()))
+            self.conn.commit()
+
+    def update_user(self, username, **fields):
+        allowed = {"display_name", "role", "password_hash", "active", "last_login"}
+        sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not sets:
+            return
+        with self.lock:
+            self.conn.execute(f"UPDATE users SET {', '.join(k + '=?' for k in sets)} WHERE username=?",
+                              list(sets.values()) + [username])
+            self.conn.commit()
+
+    def count_admins(self):
+        with self.lock:
+            return self.conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1").fetchone()[0]
+
+    # ------------------------------------------------------------ 操作紀錄（稽核）
+    def log(self, user, action, site_id=None, target=None, detail=None):
+        u = user or {}
+        with self.lock:
+            self.conn.execute(
+                "INSERT INTO audit(ts, username, display_name, role, action, site_id, target, detail_json) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (self._now(), u.get("username"), u.get("display_name"), u.get("role"), action, site_id, target,
+                 json.dumps(detail or {}, ensure_ascii=False)))
+            self.conn.commit()
+
+    def audit(self, username=None, action=None, limit=300):
+        q, args, cond = "SELECT * FROM audit", [], []
+        if username:
+            cond.append("username=?")
+            args.append(username)
+        if action:
+            cond.append("action=?")
+            args.append(action)
+        if cond:
+            q += " WHERE " + " AND ".join(cond)
+        with self.lock:
+            rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?", args + [limit]).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["detail"] = json.loads(d.pop("detail_json") or "{}")
+            out.append(d)
+        return out

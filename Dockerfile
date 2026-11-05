@@ -16,6 +16,8 @@ RUN npm run build
 # ---------- 第 2 階段：後端＋預先訓練模型 ----------
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONUTF8=1 PORT=8000
+# 雲端主機偵測不到實體核心數：固定執行緒數，避免梯度提升模型開過多執行緒反而極慢
+ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 LOKY_MAX_CPU_COUNT=1
 WORKDIR /app
 
 COPY requirements.txt .

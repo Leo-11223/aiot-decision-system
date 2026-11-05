@@ -4,6 +4,7 @@
 """
 import hashlib
 import threading
+import time
 from collections import OrderedDict
 
 import numpy as np
@@ -39,11 +40,15 @@ def short_id(*parts) -> str:
 
 class Engine:
     def __init__(self, cache_size=256):
+        t0 = time.time()
+        step = lambda msg: print(f"  [{time.time() - t0:5.0f} 秒] {msg}", flush=True)
         self.sites = load_all()
+        step("資料載入與清洗完成")
         self.verify = F.verify_sheep(self.sites["sheep"])          # 寫入成效資料庫
         self.motor_effect = F.verify_expert(self.sites["expert"])
         self.anomalies = {sid: A.detect_anomalies(s["clean"], s["cfg"]["anomaly"], s["baseline"])
                           for sid, s in self.sites.items()}
+        step("成效驗證與異常偵測完成")
         self._cache = OrderedDict()
         self._cache_size = cache_size
         self._lock = threading.Lock()
@@ -52,6 +57,7 @@ class Engine:
         for sid in self.sites:
             self.snapshot(sid)
             self.timeline(sid)
+            step(f"{sid} 模型訓練完成")
 
     # ------------------------------------------------------------ 預先訓練的模型存檔（部署用）
     # 部署時先在打包階段訓練好並存檔，雲端主機啟動時只需讀檔，不必重新訓練。

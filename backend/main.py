@@ -205,7 +205,7 @@ def review_decision(decision_id: str, body: Review, user: dict = Depends(current
     rid = db().add_review(decision_id, rec["site_id"], at, body.action, user["display_name"], note, rec["decision"])
     d = rec["decision"]
     db().log(user, body.action, rec["site_id"], f"{d['設備']}：{d['動作']}",
-             {"決策時間點": at, "執行模式": d["執行模式"], "風險": d["風險"], "備註": note, "review_id": rid})
+             {"依據資料時間": at, "執行模式": d["執行模式"], "風險": d["風險"], "備註": note, "review_id": rid})
     return {"review_id": rid, "decision_id": decision_id, "action": body.action, "site_id": rec["site_id"], "at": at}
 
 

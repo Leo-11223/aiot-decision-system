@@ -21,8 +21,10 @@ const fmtTs = (ts: string) => ts.replace('T', ' ').slice(5, 16)
 function detailText(a: AuditEntry): string {
   const d = a.detail
   if (a.action === 'approve' || a.action === 'reject') {
-    const at = typeof d['決策時間點'] === 'string' ? (d['決策時間點'] as string).replace('T', ' ').slice(5) : ''
-    return [`決策時間點 ${at}`, d['執行模式'], d['備註'] ? `原因：${d['備註']}` : null].filter(Boolean).join('，')
+    // 「依據資料時間」是這筆決策根據的感測資料時間點（時間拉條所在位置），不是按下按鈕的時間
+    const raw = d['依據資料時間'] ?? d['決策時間點']
+    const at = typeof raw === 'string' ? raw.replace('T', ' ').replace(/-/g, '/').slice(0, 16) : ''
+    return [at && `依據資料時間 ${at}`, d['執行模式'], d['備註'] ? `原因：${d['備註']}` : null].filter(Boolean).join('，')
   }
   if (a.action === 'work_order') return `${d['從']} → ${d['改為']}`
   if (a.action === 'login_failed') return `連續第 ${d['次數']} 次`
@@ -57,7 +59,7 @@ export function AdminPage({ me, siteName }: { me: User; siteName: (id: string) =
     <div className="admin">
       <div className="overview-head">
         <h1>管理</h1>
-        <p className="sub">查看每位人員的操作，並管理帳號。紀錄依時間由新到舊排列，時間為台灣時間。</p>
+        <p className="sub">查看每位人員的操作，並管理帳號。紀錄依操作時間由新到舊排列（台灣時間）；「依據資料時間」是該筆決策所根據的感測資料時間點。</p>
       </div>
       {error && <p className="error">{error}</p>}
 
@@ -96,7 +98,7 @@ export function AdminPage({ me, siteName }: { me: User; siteName: (id: string) =
             <table className="audit">
               <thead>
                 <tr>
-                  <th>時間</th>
+                  <th>操作時間</th>
                   <th>人員</th>
                   <th>動作</th>
                   <th>對象</th>

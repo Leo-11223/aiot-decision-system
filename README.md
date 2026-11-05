@@ -98,7 +98,7 @@ npm run dev
 
 部署到 Render 時，在 Environment 設定 `SECRET_KEY`（任意長亂碼）、`ADMIN_PASSWORD`，以及 `SEED_USERS`（例如 `amy,初始密碼,staff,王小美;bob,初始密碼,staff,陳大明`）。免費方案重啟會清空資料庫，靠這些變數每次自動建回帳號。
 
-免費方案的限制：15 分鐘沒人使用會休眠，下次開啟約需 1 至 2 分鐘喚醒；檔案系統不保存，重新啟動後審核紀錄會清空；CPU 只有 0.1 核，切換時間點會比本機慢。Demo 前幾分鐘先打開網址喚醒。網址任何人都能開啟，資料與核准功能沒有登入保護。
+免費方案的限制：15 分鐘沒人使用會休眠，下次開啟約需 1 至 2 分鐘喚醒；檔案系統不保存，重新啟動後審核紀錄會清空；CPU 只有 0.1 核，切換時間點會比本機慢。Demo 前幾分鐘先打開網址喚醒。網址任何人都能開啟，但必須登入才能查看資料與核准決策。
 
 ## 四、誠實的限制
 
@@ -107,3 +107,20 @@ npm run dev
 - **設備狀態碼 2／4** 的意義以資料推斷（所有點位同時出現 → 控制器層級異常），需現場確認。
 - 成本採假設值（風扇 0.75 kW、電價 NT$4/kWh），可在 `decision.py` 替換。
 - 各場域資料期間不同，「當下」以各場域最後一筆資料計。
+
+## 五、使用技術與來源
+
+依競賽須知第 6 條，本作品**未使用任何來源自中國或中資的開源模型（如 DeepSeek、Qwen）或介接工具（API、MCP）**。所有 AI 訓練與推論都在本系統內以 scikit-learn 完成，不呼叫任何外部 AI 服務。
+
+| 類別 | 技術 | 本作品用途 | 來源／維護者 | 授權 |
+|---|---|---|---|---|
+| **AI 模型（訓練與推論）** | scikit-learn | IsolationForest 異常偵測、HistGradientBoosting 趨勢預測、馬達停機分類 | 法國 INRIA 發起，開源社群維護 | BSD-3 |
+| 資料處理 | pandas、NumPy | 清洗、時間補齊、統計基準、成效驗證 | 美國發起之開源社群（NumFOCUS） | BSD-3 |
+| 後端 | Python、FastAPI、Uvicorn、Pydantic | API 服務、資料驗證 | Python 軟體基金會、開源社群 | PSF／MIT／BSD-3／MIT |
+| 資料庫 | SQLite | 審核、工單、帳號、操作紀錄 | 開源（公有領域） | Public Domain |
+| 前端 | React、TypeScript、Vite | 介面、型別檢查、打包 | Meta（美國）、Microsoft（美國）、開源社群 | MIT／Apache-2.0／MIT |
+| 字型 | Noto Sans TC、Barlow Condensed | 介面字型 | Google Fonts | OFL |
+| 部署 | Docker、Render、GitHub | 容器打包、雲端展示版、版本控管 | 美國公司 | — |
+| 開發協助 | Claude（Anthropic，美國） | 協助撰寫程式與分析；資料判讀、設計決策與驗證由團隊完成 | Anthropic | — |
+
+圖表為自行以 SVG 繪製，未使用圖表套件。完整套件版本見 `requirements.txt` 與 `frontend/package.json`。

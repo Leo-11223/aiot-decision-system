@@ -157,13 +157,13 @@ class Engine:
 
     # ------------------------------------------------------------ 時間軸事件標記（拉條上的點）
     INDICATOR = {
-        "sheep": ("成羊區 THI", "", [74, 79, 84], False),
-        "expert": ("DO 共識值", "mg/L", [4, 3, 2], True),
-        "river": ("DO（48h 中位數）", "mg/L", [6.5, 4.6, 2.0], True),
-        "breed1": ("PM2.5（24h 平均）", "µg/m³", [15.5, 35.5, 54.5], False),
-        "breed1_north": ("PM2.5（24h 平均）", "µg/m³", [15.5, 35.5, 54.5], False),
-        "northeast": ("PM2.5（24h 平均）", "µg/m³", [15.5, 35.5, 54.5], False),
-        "site": ("PM10", "µg/m³", [126, 255, 355], False),
+        "sheep": ("成羊區 THI", "", SITES["sheep"]["thresholds"]["thi"], False),
+        "expert": ("DO 共識值", "mg/L", SITES["expert"]["thresholds"]["do"], True),
+        "river": ("DO（48h 中位數）", "mg/L", SITES["river"]["thresholds"]["do"], True),
+        "breed1": ("PM2.5（24h 平均）", "µg/m³", SITES["breed1"]["thresholds"]["pm25"], False),
+        "breed1_north": ("PM2.5（24h 平均）", "µg/m³", SITES["breed1_north"]["thresholds"]["pm25"], False),
+        "northeast": ("PM2.5（24h 平均）", "µg/m³", SITES["northeast"]["thresholds"]["pm25"], False),
+        "site": ("PM10", "µg/m³", SITES["site"]["thresholds"]["pm10"], False),
     }
 
     def indicator(self, sid):

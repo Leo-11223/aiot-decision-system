@@ -14,6 +14,14 @@ VALID_RANGE = {
     "pf": (0.5, 1.0), "heat_index": (0, 60), "battery": (0, 100), "batt_v": (6, 14),
 }
 
+# ---------- 空品分級（環境部 2025/1/1 起施行之新版 AQI）----------
+# 出處：環境部空氣品質監測網「空氣品質指標」https://airtw.moenv.gov.tw/cht/Information/Standard/AirQualityIndicatorNew.aspx
+# 三級切點 = 普通／對敏感族群不健康／對所有族群不健康 的下限
+#   PM2.5（24h 平均）12.5／30.5／50.5 µg/m³；PM10（24h 平均）31／76／191 µg/m³；CO（8h 平均）4.5／9.5／12.5 ppm
+# HCHO 0.08 ppm、TVOC 0.56 ppm 為「室內空氣品質標準」1 小時值，戶外站僅作參考；其後兩級為自訂。
+AIR_THRESHOLDS = {"pm25": [12.5, 30.5, 50.5], "pm10": [31, 76, 191], "co": [4.5, 9.5, 12.5],
+                  "hcho": [0.08, 0.1, 0.2], "tvoc": [0.56, 1.0, 3.0]}
+
 SITES = {
     # ---------------------------------------------------------------- 羊舍
     "sheep": {
@@ -81,8 +89,7 @@ SITES = {
         "key": ["pm25", "pm10", "co", "hcho", "tvoc", "temp", "rh"],
         "forecast": ["pm25"],
         "anomaly": ["pm25", "pm10", "co", "hcho", "tvoc", "temp", "rh"],
-        "thresholds": {"pm25": [15.5, 35.5, 54.5], "pm10": [55, 126, 255], "co": [4.5, 9.5, 12.5],
-                       "hcho": [0.08, 0.1, 0.2], "tvoc": [0.56, 1.0, 3.0]},
+        "thresholds": AIR_THRESHOLDS,
         "devices": ["（無可控設備）告警／通報"],
     },
     "breed1_north": {
@@ -93,8 +100,7 @@ SITES = {
         "key": ["pm25", "pm10", "co", "hcho", "tvoc", "temp", "rh"],
         "forecast": [],
         "anomaly": ["pm25", "pm10", "co", "hcho", "tvoc", "temp", "rh"],
-        "thresholds": {"pm25": [15.5, 35.5, 54.5], "pm10": [55, 126, 255], "co": [4.5, 9.5, 12.5],
-                       "hcho": [0.08, 0.1, 0.2], "tvoc": [0.56, 1.0, 3.0]},
+        "thresholds": AIR_THRESHOLDS,
         "devices": ["（無可控設備）告警／通報"],
     },
     "northeast": {
@@ -104,8 +110,7 @@ SITES = {
         "key": ["pm25", "pm10", "co", "hcho", "tvoc", "temp", "rh"],
         "forecast": ["pm25"],
         "anomaly": ["pm25", "pm10", "co", "hcho", "tvoc", "temp", "rh"],
-        "thresholds": {"pm25": [15.5, 35.5, 54.5], "pm10": [55, 126, 255], "co": [4.5, 9.5, 12.5],
-                       "hcho": [0.08, 0.1, 0.2], "tvoc": [0.56, 1.0, 3.0]},
+        "thresholds": AIR_THRESHOLDS,
         "devices": ["（無可控設備）告警／通報"],
     },
     # ---------------------------------------------------------------- 工地微氣候

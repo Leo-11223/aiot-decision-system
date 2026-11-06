@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from . import analysis as A
+from . import diagnose as G
 from .config import TRUST_AUTO, TRUST_FALLBACK, AIR_PEERS
 from .data import thi_formula
 from .feedback import EFFECT_DB
@@ -47,6 +48,38 @@ def work_order(site, title, kind, detail, severity, parts="—", due="7 天內")
 
 def diag(problem, causes, evidence, confidence):
     return {"問題": problem, "可能原因": causes, "判斷證據": evidence, "可信度": confidence}
+
+
+GAS = ("co", "hcho", "tvoc")
+LABELS = {"thi": "成羊區 THI", "temp": "溫度", "rh": "濕度", "co2": "CO2", "nh3": "ID4 NH3",
+          "nh3_avg": "成羊區平均 NH3", "temp_avg": "成羊區平均溫度", "pm25": "PM2.5", "pm10": "PM10",
+          "co": "CO", "hcho": "HCHO", "tvoc": "TVOC", "noise": "噪音", "wind": "風速"}
+
+
+def _sensor_actions(name, found, diags, decs, wos, trust_of):
+    """通用偵測器的發現 → 診斷、決策、工單（依問題類型對應處置）。"""
+    for f, d in found:
+        diags.append(diag(*d))
+        k = f.get("變數")
+        lab = LABELS.get(k, k)
+        t = f["類型"]
+        if t == "卡值":
+            wos.append(work_order(name, f"{lab} 感測模組檢查", "數據品質", d[2], 2, f"{lab} 感測模組"))
+        elif t == "階躍":
+            if f["鄰站同步"]:
+                decs.append(decision(name, f"{lab} 量測", "以手持式儀器現場比對，確認是真實排放或感測器漂移", "3 天內", "—",
+                                     d[2], "區分區域排放事件與感測器問題", "中", trust_of(k), False,
+                                     f"比對前 {lab} 告警標示「待確認」", priority=2))
+            else:
+                decs.append(decision(name, f"{lab} 感測器", f"暫停 {lab} 告警判斷，零點校正", "7 天內", "—",
+                                     d[2], f"避免誤報 {lab} 超標", "低", trust_of(k), False,
+                                     f"校正前 {lab} 告警改為「待確認」等級，由人工判讀", priority=2))
+            wos.append(work_order(name, f"{lab} 感測器零點校正與現場比對", "數據品質", d[2][:80], 2, "標準氣體"))
+        elif t == "重啟":
+            decs.append(decision(name, "告警規則", "斷線恢復後 2 小時內讀值不觸發告警", "設定變更", "—",
+                                 d[2], "減少重啟暖機造成的誤報", "低", 100, True, "—", priority=3))
+        elif t in ("飽和", "超出範圍"):
+            wos.append(work_order(name, f"{lab} 感測器量程檢查", "數據品質", d[2][:80], 1, "—", "30 天內"))
 
 
 def _now(site, col):
@@ -139,9 +172,14 @@ def build_sheep(site, ctx):
              f"規則建議開風扇 {replay['hours_need']} 小時，實際開啟僅 {replay['hours_actual']} 小時"
              f"（執行率 {replay['hours_actual']/max(1,replay['hours_need']):.1%}）；"
              f"既有「加開」旗標亮起 {replay['addon_flag_hours']} 小時", "高"),
-        diag("成羊區平均 NH3 讀值無效", "平均值計算未納入有效探頭，或 NH3 感測器故障",
-             f"成羊區平均NH3 全期 100% 為 0（卡值），同時段 ID4 NH3 有讀值 0.03–0.05", "高"),
     ]
+    nh3_stuck = G.stuck_value(site["df"]["nh3_avg"])
+    id4 = site["clean"]["nh3"].dropna()
+    id4_txt = f"{id4.quantile(0.05):.2f}–{id4.quantile(0.95):.2f} ppm" if len(id4) else "無資料"
+    if nh3_stuck:
+        p_, c_, e_, conf_ = G.describe(nh3_stuck, "成羊區平均 NH3")
+        diags.append(diag(p_, "平均值計算未納入有效探頭，或 NH3 感測器故障",
+                          e_ + f"；同時段 ID4 NH3 有讀值（5–95% 區間 {id4_txt}）", conf_))
     if abn:
         diags.append(diag("控制器異常碼", "控制器／通訊模組回報異常（所有設備同時出現 2/4 碼）",
                           f"異常碼時段：{', '.join(abn[:2])} … 共 {len(abn)} 小時，全部 16 個設備點位同時異常", "中"))
@@ -180,14 +218,15 @@ def build_sheep(site, ctx):
         decs.append(decision(name, "飲水／噴霧（人工）", "增加飲水供應、啟動噴霧降溫", "立即",
                              "全區", f"THI 達或預測達緊急級（{max(thi, peak6):.1f}）",
                              "降低熱休克與採食下降風險", "高", tr, False, "現場人員巡檢羊隻呼吸頻率", priority=1))
-    decs.append(decision(name, "成羊區 NH3 量測", "停用平均值，改用 ID4 NH3", "立即", "—",
-                         "成羊區平均NH3 長期為 0，可信度 {:.0f}".format(nh3_trust or 0),
-                         "避免以失效數據判斷氨氣風險", "低", nh3_trust, False,
-                         "以 ID4 NH3（0.03–0.05 ppm）代表；派工校正", priority=2))
-
-    wos = [
+    if nh3_stuck:
+        decs.append(decision(name, "成羊區 NH3 量測", "停用平均值，改用 ID4 NH3", "立即", "—",
+                             "成羊區平均NH3 讀值無反應，可信度 {:.0f}".format(nh3_trust or 0),
+                             "避免以失效數據判斷氨氣風險", "低", nh3_trust, False,
+                             f"以 ID4 NH3（{id4_txt}）代表；派工校正", priority=2))
+    wos = [] if not nh3_stuck else [
         work_order(name, "成羊區平均 NH3 感測器檢修／校正", "數據品質",
-                   "平均 NH3 全期為 0，需確認探頭接線與平均值計算設定", 2, "NH3 感測模組"),
+                   f"平均 NH3 {nh3_stuck['比例']:.0%} 時間為 {nh3_stuck['數值']:g}，需確認探頭接線與平均值計算設定", 2, "NH3 感測模組")]
+    wos += [
         work_order(name, "風扇自動連動設定", "生產",
                    f"建議開風扇 {replay['hours_need']} 小時、實際 {replay['hours_actual']} 小時；將 THI≥79 連動風扇（試行期人工確認）", 3,
                    due="3 天內"),
@@ -219,7 +258,8 @@ def build_expert(site, ctx):
     motor = A.motor_stop_model(df, key="expert:motor")
     mstop = ctx["motor_effect"]
     pf = float(df["pf"].iloc[-168:].mean())
-    kwh7 = float(df["kwh"].iloc[-1] - df["kwh"].iloc[-169]) if df["kwh"].iloc[-169] > 0 else None
+    kwh7 = (float(df["kwh"].iloc[-1] - df["kwh"].iloc[-169])
+            if len(df) >= 169 and df["kwh"].iloc[-169] > 0 else None)   # 不足 7 天資料時不計算
     sc_eta, _ = A.linear_eta(c["sc1"], 2.0)
 
     status = {"指數": "WQI（簡化水質指數，DO＋pH）", "數值": w, "等級": A.LEVEL_NAME[lvl or 0], "等級碼": lvl or 0,
@@ -401,23 +441,12 @@ def build_air(site, ctx):
               "讀值": vals, "PM2.5(24h)": None if pd.isna(pm24) else round(float(pm24), 1),
               "Fallback來源": used_peer}
     diags, decs, wos = [], [], []
-    if sid == "breed1" and ts >= pd.Timestamp("2026-06-27"):
-        co_m = df["co"].resample("MS").median()
-        diags += [
-            diag("CO 讀值階躍上升後緩降", "電化學 CO 感測器零點漂移（6/27 重新上電／更換後未校正）；或局部燃燒源",
-                 f"CO 日中位數 6/26 為 0，6/27 跳到 31.7 ppm 後逐日緩降；月中位數 "
-                 + "、".join(f"{d.month}月 {v:.1f}" for d, v in co_m.items())
-                 + "；同期東北角 CO 為 0；白天跟著氣溫升高（溫度干擾特徵）", "中"),
-        ]
-        decs.append(decision(name, "CO 感測器", "暫停 CO 告警判斷，零點校正", "7 天內", "—",
-                             "CO 階躍＋緩降為漂移特徵，與鄰站不一致", "避免誤報 CO 超標", "低", _trust_now(site, "co", 24), False,
-                             "校正前 CO 告警改為「待確認」等級，由人工判讀", priority=2))
-        wos.append(work_order(name, "CO 感測器零點校正", "數據品質", "6/27 起 CO 偏高且與鄰站不一致", 2, "標準氣體"))
-    if sid == "breed1" and ts >= pd.Timestamp("2026-08-29 14:00"):
-        diags.append(diag("TVOC 42.8 ppm 尖峰", "斷電重啟後感測器暖機假峰值",
-                          "8/29 10–13 時資料中斷，14 時恢復即出現 42.8，下一小時回落 1.1，PM 未同步上升", "高"))
-        decs.append(decision(name, "告警規則", "重啟後 2 小時內讀值不觸發告警", "設定變更", "—",
-                             "重啟暖機會產生假峰值", "減少誤報", "低", 100, True, "—", priority=3))
+    # 感測器問題：由通用偵測器從資料中找出（不寫死日期或數值）
+    peers = {k: {ctx["sites"][p]["cfg"]["name"].split("（")[0]: ctx["sites"][p]["df"][k]
+                 for p in AIR_PEERS if p != sid} for k in GAS}
+    found = G.sensor_findings(df, cfg, LABELS, gas=GAS, peers=peers, cuts=cfg["thresholds"],
+                              temp=df["temp"], restart_cols=GAS + ("pm25", "pm10"))
+    _sensor_actions(name, found, diags, decs, wos, lambda k: _trust_now(site, k, 24))
     if sid == "breed1_north":
         boots = df["boots"].dropna()
         diags.append(diag("資料完整率過低", "供電中斷（太陽能／市電）或通訊中斷後未自動補傳",
@@ -429,13 +458,6 @@ def build_air(site, ctx):
                              f"以鄰站 {used_peer or '育成一廠'} 24h PM2.5 代表", priority=2))
         wos.append(work_order(name, "北側站供電與資料補傳檢修", "數據品質",
                               f"完整率 {completeness:.1%}、多次重開機、最後一筆全 0", 3, "電源模組／電池", "3 天內"))
-    if sid == "northeast":
-        z = {k: float((df[k] == 0).mean()) for k in ["co", "hcho", "tvoc"]}
-        diags.append(diag("氣體感測器長期無反應", "CO／HCHO／TVOC 感測模組失效或未啟用",
-                          f"讀值為 0 的比例：CO {z['co']:.0%}、HCHO {z['hcho']:.0%}、TVOC {z['tvoc']:.0%}", "高"))
-        if ts >= pd.Timestamp("2026-08-23 17:00"):
-            diags.append(diag("單筆異常讀值", "感測器瞬間故障", "8/23 17 時溫度 −2.8°C、濕度 0%（物理上不可能），已自動排除", "高"))
-        wos.append(work_order(name, "氣體感測模組檢查", "數據品質", "CO／HCHO／TVOC 長期為 0", 2, "氣體感測模組"))
     if used_peer:
         pass  # 本站已改走 Fallback（借用鄰站），不再重複產生監測決策
     elif lvl and lvl >= 1:
@@ -470,33 +492,40 @@ def build_site(site, ctx):
               "讀值": {"PM10": pm10, "PM2.5": _now(site, "pm25")[0], "噪音": noise, "溫度": _now(site, "temp")[0],
                      "濕度": _now(site, "rh")[0], "風速": _now(site, "wind")[0]},
               "設定門檻": site["meta"]}
-    diags = []
-    if ts >= pd.Timestamp("2026-03-13 17:00"):
-        diags.append(diag("PM10 單點極端值 1200", "感測器量測上限飽和或施工機具緊鄰排放",
-                          "3/13 17 時 PM2.5 968、PM10 1200（上限值），前後小時正常、濕度 60%，只持續 1 小時", "中"))
+    diags, s_decs, wos = [], [], []
+    found = G.sensor_findings(df, cfg, LABELS, cuts=cfg["thresholds"])
+    pm_bad = [f for f, _ in found if f.get("變數") in ("pm10", "pm25")]
+    _sensor_actions(name, [x for x in found if x[0].get("變數") not in ("pm10", "pm25")], diags, s_decs, wos,
+                    lambda k: _trust_now(site, k, 24))
+    for f, d in found:
+        if f.get("變數") in ("pm10", "pm25"):
+            diags.append(diag(*d))
     diags += [
         diag("高濕時 PM 偏高", "光學式粉塵計在高濕度下吸濕高估，或逆溫擴散不良",
-             f"PM10 超過 126 的 {int(over.sum())} 小時中，{(over & rh_hi).sum()/max(1,over.sum()):.0%} 發生在濕度 ≥85%", "中"),
-        diag("夜間噪音", "夜間施工或機具運轉", f"夜間（22–6 時）噪音 ≥67 dB 共 {int(loud_night.sum())} 小時", "中"),
+             f"PM10 超過 {cfg['thresholds']['pm10'][0]} 的 {int(over.sum())} 小時中，{(over & rh_hi).sum()/max(1,over.sum()):.0%} 發生在濕度 ≥85%", "中"),
+        diag("夜間噪音", "夜間施工或機具運轉", f"夜間（22–6 時）噪音 ≥{cfg['thresholds']['noise'][0]} dB 共 {int(loud_night.sum())} 小時", "中"),
     ]
     decs = []
     if eta is not None or (lvl and lvl >= 1):
         decs.append(decision(name, "灑水／霧化降塵", "啟動", "立即" if lvl else f"{eta} 小時內", "周界全段",
                              f"PM10 現值 {pm10:.0f}（{A.LEVEL_NAME[lvl or 0]}）"
-                             + (f"，預測 {eta} 小時後超過 126" if eta and not lvl else ""), "抑制揚塵",
+                             + (f"，預測 {eta} 小時後超過 {cfg['thresholds']['pm10'][0]}" if eta and not lvl else ""), "抑制揚塵",
                              "低", tr, False, "粉塵計失效 → 依施工時段排程灑水", priority=1))
     else:
         decs.append(decision(name, "灑水／霧化降塵", "待命（不啟動）", "持續監測", "—",
-                             f"PM10 現值 {pm10:.0f}，6 小時內預測最高 {max(fc['pred']):.0f}（<126）", "節省用水",
+                             f"PM10 現值 {pm10:.0f}，6 小時內預測最高 {max(fc['pred']):.0f}（<{cfg['thresholds']['pm10'][0]}）", "節省用水",
                              "低", tr, True, "粉塵計失效 → 依施工時段排程灑水", priority=3))
     decs.append(decision(name, "作業調整（人工）", "熱危害等級 ≥2 時暫停戶外重體力作業", "依熱指數即時判斷",
                          "每小時休息 15 分鐘起", f"至今熱危害時數 {heat} 小時，現值等級 {int(df['hazard'].iloc[-1]) if pd.notna(df['hazard'].iloc[-1]) else 0}", "預防熱傷害",
                          "高", tr, False, "熱指數失效 → 依氣象局高溫資訊", priority=3))
-    wos = []
-    if ts >= pd.Timestamp("2026-03-13 17:00"):
-        wos.append(work_order(name, "粉塵計檢查（飽和值＋高濕修正）", "數據品質", "出現 1200 上限值；評估加裝除濕進氣或濕度修正", 1, "—", "30 天內"))
+    decs += s_decs
+    if pm_bad:
+        f = pm_bad[-1]
+        wos.append(work_order(name, "粉塵計檢查（極端值＋高濕修正）", "數據品質",
+                              f"{f['開始'].month}/{f['開始'].day} 出現 {LABELS.get(f['變數'])} {f['數值']:g}，超出合理範圍；評估加裝除濕進氣或濕度修正",
+                              1, "—", "30 天內"))
     return {"status": status, "diagnoses": diags, "decisions": decs, "work_orders": wos,
-            "forecast": [_fc_summary(fc, "PM10", "µg/m³")], "eta": {"PM10達126(h)": eta}}
+            "forecast": [_fc_summary(fc, "PM10", "µg/m³")], "eta": {f"PM10達{cfg['thresholds']['pm10'][0]}(h)": eta}}
 
 
 BUILDERS = {"sheep": build_sheep, "expert": build_expert, "river": build_river,

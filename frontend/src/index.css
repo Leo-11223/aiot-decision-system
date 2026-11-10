@@ -303,3 +303,24 @@ table.audit tr.inactive td { opacity: 0.5; }
 @media (max-width: 640px) {
   .whoami { order: 2; margin-left: auto; }
 }
+
+/* ---------- 05 執行：控制指令（模擬控制器） ---------- */
+.control .sim-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 10px; cursor: pointer; }
+.control .sim-toggle input { accent-color: var(--lvl-3); width: 16px; height: 16px; }
+.commands { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.commands li { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 8px 12px; background: var(--panel-2); min-width: 0; }
+.commands li.done { border-left-color: var(--lvl-0); }
+.commands li.failed { border-left-color: var(--lvl-3); }
+.commands li.manual { border-left-color: var(--lvl-1); }
+.commands .cmd-title { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.commands .cmd-title b { font-size: 14px; }
+.cmd-status { flex: none; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; color: var(--accent); }
+.cmd-status.done { color: var(--lvl-0); }
+.cmd-status.failed { color: var(--lvl-3); }
+.cmd-status.manual { color: var(--lvl-1); }
+.cmd-status.sent::after { content: '…'; }
+.commands .cmd-writes { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--text); margin: 6px 0 4px; overflow-wrap: anywhere; }
+.commands .meta { font-size: 12px; color: var(--muted); margin: 2px 0; }
+.commands button { margin-top: 6px; }
+.ctl-kind { display: inline-block; font-size: 11px; padding: 0 6px; margin-right: 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.ctl-kind.device { border-color: var(--accent); color: var(--accent); }

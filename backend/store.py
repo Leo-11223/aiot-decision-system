@@ -1,4 +1,4 @@
-"""SQLite 紀錄：人工核准／駁回決策、工單狀態、帳號、操作紀錄。
+"""SQLite 紀錄：人工核准／駁回決策、控制指令、工單狀態、帳號、操作紀錄。
 這就是閉環中「人工確認」與「派工」的落地紀錄，也是管理員稽核的依據。"""
 import json
 import sqlite3
@@ -36,6 +36,11 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
                 username TEXT, display_name TEXT, role TEXT,
                 action TEXT NOT NULL, site_id TEXT, target TEXT, detail_json TEXT);
+            CREATE TABLE IF NOT EXISTS commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, site_id TEXT NOT NULL, decision_id TEXT,
+                data_time TEXT, device TEXT, action TEXT, plan_json TEXT NOT NULL,
+                status TEXT NOT NULL, operator TEXT, auto INTEGER NOT NULL DEFAULT 0, note TEXT,
+                sent_at TEXT NOT NULL, updated_at TEXT NOT NULL, done_by TEXT);
             """)
             self.conn.commit()
 
@@ -71,6 +76,57 @@ class Store:
     def _review(r):
         d = dict(r)
         d["decision"] = json.loads(d.pop("decision_json"))
+        return d
+
+    # ------------------------------------------------------------ 控制指令（05 執行）
+    def add_command(self, site_id, decision_id, data_time, device, action, plan, status, operator, note, auto):
+        now = self._now()
+        with self.lock:
+            cur = self.conn.execute(
+                "INSERT INTO commands(site_id, decision_id, data_time, device, action, plan_json, status, operator, auto,"
+                " note, sent_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (site_id, decision_id, data_time, device, action, json.dumps(plan, ensure_ascii=False), status,
+                 operator, int(auto), note, now, now))
+            self.conn.commit()
+            cid = cur.lastrowid
+        return self.command(cid)
+
+    def command(self, cid):
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM commands WHERE id=?", (cid,)).fetchone()
+        return self._command(row) if row else None
+
+    def commands(self, site_id=None, limit=50):
+        q, args = "SELECT * FROM commands", []
+        if site_id:
+            q, args = q + " WHERE site_id=?", [site_id]
+        with self.lock:
+            rows = self.conn.execute(q + " ORDER BY id DESC LIMIT ?", args + [limit]).fetchall()
+        return [self._command(r) for r in rows]
+
+    def pending_commands(self, cutoff):
+        with self.lock:
+            rows = self.conn.execute("SELECT * FROM commands WHERE status='已下發' AND sent_at<=?", (cutoff,)).fetchall()
+        return [self._command(r) for r in rows]
+
+    def last_device_command(self, site_id, device):
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM commands WHERE site_id=? AND device=? ORDER BY id DESC LIMIT 1",
+                                    (site_id, device)).fetchone()
+        return self._command(row) if row else None
+
+    def update_command(self, cid, status, done_by=None, note=None):
+        with self.lock:
+            self.conn.execute("UPDATE commands SET status=?, updated_at=?, done_by=COALESCE(?, done_by),"
+                              " note=COALESCE(?, note) WHERE id=?", (status, self._now(), done_by, note, cid))
+            self.conn.commit()
+        return self.command(cid)
+
+    @staticmethod
+    def _command(r):
+        d = dict(r)
+        d["plan"] = json.loads(d.pop("plan_json"))
+        d["auto"] = bool(d["auto"])
         return d
 
     # ------------------------------------------------------------ 工單

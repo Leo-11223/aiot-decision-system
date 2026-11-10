@@ -43,6 +43,37 @@ export type Decision = {
   成本: string
   優先: number
   審核: Review | null
+  控制指令: ControlPlan
+}
+
+// ---------- 05 執行：控制指令（模擬控制器） ----------
+export type ModbusWrite = { 功能碼: string; 功能: string; 位址: string; 值: string; 點位: string }
+
+export type ControlPlan = {
+  類型: '設備指令' | '系統設定' | '系統通知' | '人工作業' | '維持現狀'
+  說明: string
+  協定?: string
+  控制器?: string
+  站號?: number
+  點位來源?: string
+  寫入?: ModbusWrite[]
+}
+
+export type Command = {
+  id: number
+  site_id: string
+  decision_id: string | null
+  data_time: string | null
+  device: string
+  action: string
+  plan: ControlPlan
+  status: '已下發' | '設備已執行' | '下發失敗' | '人工已完成'
+  operator: string | null
+  auto: boolean
+  note: string | null
+  sent_at: string
+  updated_at: string
+  done_by: string | null
 }
 
 export type WorkOrderStatus = { status: string; operator: string | null; updated_at: string | null }
@@ -204,6 +235,18 @@ export const api = {
     request<WorkOrderStatus>(`/api/work-orders/${woId}`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
+    }),
+}
+
+export const controlApi = {
+  commands: (siteId?: string, limit = 20) =>
+    request<{ offline: boolean | string[]; commands: Command[] }>('/api/control/commands' + q({ site_id: siteId, limit })),
+  manualDone: (id: number, note?: string) =>
+    request<Command>(`/api/control/commands/${id}/manual-done`, { method: 'POST', body: JSON.stringify({ note }) }),
+  setOffline: (siteId: string, offline: boolean) =>
+    request<{ site_id: string; offline: boolean }>('/api/control/sim', {
+      method: 'POST',
+      body: JSON.stringify({ site_id: siteId, offline }),
     }),
 }
 

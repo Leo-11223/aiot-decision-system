@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, feedbackApi } from '../api'
 import type { Decision, Outcome, Series, Snapshot, Timeline } from '../api'
+import { ControlPanel } from '../components/ControlPanel'
 import { DecisionList } from '../components/DecisionList'
 import { OutcomeList } from '../components/OutcomeList'
 import { LineChart } from '../components/LineChart'
@@ -10,6 +11,7 @@ import { HOUR, SITE_CHART, fmtNum, fmtTime, levelVar, sensorLabel, toApi, toMs }
 
 const SERIES_COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)']
 const WO_STATUS = ['待派工', '處理中', '已完成']
+const CONTROLLED = ['sheep', 'expert', 'site'] // 有可遠端控制設備的場域（模擬控制器）
 
 type Props = { siteId: string; initialAt?: string; onAtChange: (at: string) => void }
 
@@ -26,6 +28,7 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
   const [outcomes, setOutcomes] = useState<Outcome[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [cmdKey, setCmdKey] = useState(0)
   const reqId = useRef(0)
 
   const chart = SITE_CHART[siteId]
@@ -111,6 +114,7 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
 
   const onReview = async (d: Decision, action: 'approve' | 'reject', note?: string) => {
     await api.review(d.id, action, note)
+    setCmdKey((k) => k + 1)
     if (cursor !== null) await load(cursor)
   }
 
@@ -256,6 +260,11 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
           <section className="panel">
             <h2>現在該做什麼</h2>
             {snap ? <DecisionList decisions={snap.decisions} onReview={onReview} /> : <p className="empty">載入中</p>}
+          </section>
+
+          <section className="panel">
+            <h2>執行（控制指令）</h2>
+            <ControlPanel siteId={siteId} refreshKey={`${cmdKey}-${snap?.at ?? ''}`} hasController={CONTROLLED.includes(siteId)} />
           </section>
 
           <section className="panel">

@@ -14,6 +14,9 @@ const ACTIONS: Record<string, string> = {
   password_change: '修改密碼',
   user_create: '新增帳號',
   user_update: '修改帳號',
+  command: '下發控制指令',
+  command_manual: '人工完成指令',
+  sim: '模擬通訊',
 }
 
 const fmtTs = (ts: string) => ts.replace('T', ' ').slice(5, 16)
@@ -25,6 +28,13 @@ function detailText(a: AuditEntry): string {
     const raw = d['依據資料時間'] ?? d['決策時間點']
     const at = typeof raw === 'string' ? raw.replace('T', ' ').replace(/-/g, '/').slice(0, 16) : ''
     return [at && `依據資料時間 ${at}`, d['執行模式'], d['備註'] ? `原因：${d['備註']}` : null].filter(Boolean).join('，')
+  }
+  if (a.action === 'command' || a.action === 'command_manual') {
+    const raw = d['依據資料時間']
+    const at = typeof raw === 'string' ? raw.replace('T', ' ').replace(/-/g, '/').slice(0, 16) : ''
+    return [d['指令'], d['寫入'], d['狀態'], at && `依據資料時間 ${at}`, d['備註'] ? `說明：${d['備註']}` : null]
+      .filter(Boolean)
+      .join('，')
   }
   if (a.action === 'work_order') return `${d['從']} → ${d['改為']}`
   if (a.action === 'login_failed') return `連續第 ${d['次數']} 次`

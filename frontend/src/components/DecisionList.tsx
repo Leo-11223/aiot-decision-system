@@ -66,6 +66,17 @@ export function DecisionList({ decisions, onReview }: Props) {
                 <dd>{d.預期效果}</dd>
               </div>
             )}
+            {d.控制指令 && (
+              <div>
+                <dt>控制指令</dt>
+                <dd>
+                  <span className={'ctl-kind ' + (d.控制指令.類型 === '設備指令' ? 'device' : '')}>{d.控制指令.類型}</span>
+                  {d.控制指令.類型 === '設備指令'
+                    ? `${d.控制指令.協定}：` + (d.控制指令.寫入 ?? []).map((w) => `FC${w.功能碼} ${w.位址}＝${w.值}（${w.點位}）`).join('；')
+                    : d.控制指令.說明}
+                </dd>
+              </div>
+            )}
             <div>
               <dt>風險</dt>
               <dd>
@@ -86,7 +97,11 @@ export function DecisionList({ decisions, onReview }: Props) {
             )}
           </dl>
           <footer>
-            {d.執行模式 === '自動執行' && <span className="note">低風險且已驗證，系統自動下發</span>}
+            {d.執行模式 === '自動執行' && (
+              <span className="note">
+                {d.控制指令?.類型 === '設備指令' ? '低風險且已驗證，系統自動下發（見「執行」面板）' : '低風險且已驗證，系統自動處理'}
+              </span>
+            )}
             {d.執行模式 !== '自動執行' && d.審核 && (
               <span className={'note ' + (d.審核.action === 'approve' ? 'ok' : 'bad')}>
                 {d.審核.action === 'approve' ? '已核准' : '已駁回'}（{d.審核.operator ?? '—'}，{d.審核.at.replace('T', ' ').slice(5, 16)}）

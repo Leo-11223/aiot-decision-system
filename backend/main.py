@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 
 from aiot.config import SITES
 from . import auth
+from . import control
+from .control import SIM
 from .engine import Engine
 from .store import Store, WO_STATUS
 
@@ -114,6 +116,7 @@ def with_review_status(snap):
     for d in snap["decisions"]:
         rv = db().latest_review(d["id"])
         d["審核"] = None if rv is None else {"action": rv["action"], "operator": rv["operator"], "at": rv["created_at"]}
+        d["控制指令"] = control.plan(d["site_id"], d)
     for w in snap["work_orders"]:
         w["狀態"] = db().wo_status(w["id"])
     return snap
@@ -149,7 +152,31 @@ def list_sites(at: Optional[str] = Query(None, description=AT_DOC + "（超出�
 @app.get("/api/sites/{site_id}", tags=["場域"], summary="單一場域的完整快照（狀態、診斷、預測、決策、工單）")
 def site_snapshot(site_id: str, at: Optional[str] = Query(None, description=AT_DOC), user: dict = Depends(current_user)):
     check_site(site_id)
-    return with_review_status(copy.deepcopy(eng().snapshot(site_id, at)))
+    snap = with_review_status(copy.deepcopy(eng().snapshot(site_id, at)))
+    auto_dispatch(snap)
+    return snap
+
+
+SYSTEM_USER = {"username": "system", "display_name": "系統（自動執行）", "role": "system"}
+
+
+def auto_dispatch(snap):
+    """「自動執行」且需要動設備的決策：系統直接下發。設備狀態沒變（與上一筆指令相同）就不重複下發。"""
+    at = str(snap.get("at", ""))[:16]
+    for d in snap["decisions"]:
+        p = d["控制指令"]
+        if d["執行模式"] != "自動執行" or p["類型"] != "設備指令":
+            continue
+        last = db().last_device_command(d["site_id"], d["設備"])
+        if last and last["plan"].get("寫入") == p.get("寫入") and last["status"] != "下發失敗":
+            continue
+        c = SIM.send(db(), d["site_id"], d["id"], at, d, p, SYSTEM_USER["display_name"], auto=True)
+        db().log(SYSTEM_USER, "command", d["site_id"], f"{d['設備']}：{d['動作']}", _cmd_detail(c, at))
+
+
+def _cmd_detail(c, at):
+    return {"依據資料時間": at, "指令": c["plan"].get("說明"), "狀態": c["status"], "command_id": c["id"],
+            "寫入": "；".join(f"{w['點位']} {w['位址']}＝{w['值']}" for w in c["plan"].get("寫入", []))}
 
 
 @app.get("/api/sites/{site_id}/series", tags=["場域"], summary="時間序列（畫即時曲線用）")
@@ -206,7 +233,56 @@ def review_decision(decision_id: str, body: Review, user: dict = Depends(current
     d = rec["decision"]
     db().log(user, body.action, rec["site_id"], f"{d['設備']}：{d['動作']}",
              {"依據資料時間": at, "執行模式": d["執行模式"], "風險": d["風險"], "備註": note, "review_id": rid})
-    return {"review_id": rid, "decision_id": decision_id, "action": body.action, "site_id": rec["site_id"], "at": at}
+    # 05 執行：核准且需要動設備 → 產生控制指令送往（模擬）控制器
+    cmd = None
+    p = control.plan(rec["site_id"], d)
+    if body.action == "approve" and p["類型"] == "設備指令":
+        cmd = SIM.send(db(), rec["site_id"], decision_id, at, d, p, user["display_name"])
+        db().log(user, "command", rec["site_id"], f"{d['設備']}：{d['動作']}", _cmd_detail(cmd, at))
+    return {"review_id": rid, "decision_id": decision_id, "action": body.action, "site_id": rec["site_id"], "at": at,
+            "控制計畫": p, "command": cmd}
+
+
+# ================================================================ 05 執行（模擬控制器）
+@app.get("/api/control/commands", tags=["執行"], summary="控制指令紀錄（含模擬控制器回報）")
+def list_commands(site_id: Optional[str] = None, limit: int = Query(50, ge=1, le=500),
+                  user: dict = Depends(current_user)):
+    SIM.refresh(db())
+    return {"offline": SIM.is_offline(site_id) if site_id else sorted(SIM.offline),
+            "commands": db().commands(site_id, limit)}
+
+
+class CommandUpdate(BaseModel):
+    note: Optional[str] = Field(None, description="現場處理說明")
+
+
+@app.post("/api/control/commands/{cid}/manual-done", tags=["執行"], summary="下發失敗改派人工後，人員回報已在現場完成")
+def command_manual_done(cid: int, body: CommandUpdate, user: dict = Depends(current_user)):
+    c = db().command(cid)
+    if c is None:
+        raise HTTPException(404, "找不到這筆指令")
+    if c["status"] != "下發失敗":
+        raise HTTPException(409, "只有「下發失敗」的指令需要人工回報")
+    note = (body.note or "").strip()[:200]
+    c = db().update_command(cid, "人工已完成", user["display_name"],
+                            f"{c['note']}；{user['display_name']} 回報現場已完成" + (f"：{note}" if note else ""))
+    db().log(user, "command_manual", c["site_id"], f"{c['device']}：{c['action']}",
+             {"依據資料時間": c["data_time"], "指令": c["plan"].get("說明"), "狀態": "人工已完成", "備註": note or None,
+              "command_id": cid})
+    return c
+
+
+class SimBody(BaseModel):
+    site_id: str
+    offline: bool = Field(..., description="true = 模擬控制器通訊中斷")
+
+
+@app.post("/api/control/sim", tags=["執行"], summary="模擬通訊中斷（測試下發失敗 → 改派人工的流程）")
+def control_sim(body: SimBody, user: dict = Depends(current_user)):
+    check_site(body.site_id)
+    SIM.set_offline(body.site_id, body.offline)
+    db().log(user, "sim", body.site_id, "模擬控制器", {"通訊": "中斷" if body.offline else "恢復"})
+    return {"site_id": body.site_id, "offline": SIM.is_offline(body.site_id)}
 
 
 @app.get("/api/reviews", tags=["決策"], summary="審核紀錄（執行回饋的資料來源）")

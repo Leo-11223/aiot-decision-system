@@ -14,7 +14,8 @@ import pandas as pd
 
 from . import analysis as A
 from . import diagnose as G
-from .config import TRUST_AUTO, TRUST_FALLBACK, AIR_PEERS
+from . import feedback as F
+from .config import Z_ONE_SIDED, MIN_SAMPLES, TRUST_AUTO, TRUST_FALLBACK, AIR_PEERS
 from .data import thi_formula
 from .feedback import EFFECT_DB
 
@@ -131,12 +132,59 @@ def _anom_summary(site, an):
 
 
 # =================================================================== 羊舍
+FAN_COUNT = 4          # 羊舍可控風扇數（風扇-03／04／07／08）
+FAN_HOLD_H = 4         # 預估開啟時數（決策輸出與成本估算用）
+
+
+def fan_plan(peak, eff=None, n_avail=FAN_COUNT, hours=FAN_HOLD_H):
+    """風扇台數推算。peak：現值與未來 6 小時預測的較高者；eff：成效資料庫中「風扇開啟」的驗證結果。
+
+    目標：危險級（≥79）降到 79 以下；警戒級（74–78）降回 74 以下。
+    ① 效果已驗證：每台效果 = 保守估計值（效果 + 1.645×標準誤，取較不樂觀的一端）÷ 平均同時開啟台數，
+       需要台數 = 要降的量 ÷（每台每 2 小時效果 × 開啟時數 / 2），無條件進位，上限為現有台數。
+    ② 效果未驗證：無法從資料推算台數。
+       危險級 → 全開（保守）：多開一台的電費遠低於熱緊迫造成的損失，且全開才能累積成效樣本。
+       警戒級 → 開一半（試驗）：與危險級的全開形成對照，累積「不同台數」的成效資料，之後才能推算每台效果。
+    回傳 {"n", "模式", "說明", "足夠"}；足夠=False 代表全開仍不足以達標，需搭配其他降溫措施。"""
+    if peak is None or pd.isna(peak) or peak < 74:
+        return {"n": 0, "模式": "不需開啟", "說明": "THI 低於 74（正常）", "足夠": True}
+    target = 79 if peak >= 79 else 74
+    gap = peak - target + 0.1
+    eff = eff or {}
+    e, se, n_s = eff.get("effect"), eff.get("se"), eff.get("n", 0)
+    fans_mean = eff.get("fans_mean") or n_avail
+    cond = f"樣本 {n_s} 筆" + (f"，效果 {e:+.2f}±{se:.2f}" if e is not None and se is not None else "")
+    if eff.get("verified") and e is not None and se is not None and e + Z_ONE_SIDED * se < 0:
+        per_fan = -(e + Z_ONE_SIDED * se) / fans_mean          # 每台每 2 小時可多降的 THI（保守值）
+        drop_each = per_fan * hours / 2
+        need = int(np.ceil(gap / drop_each))
+        n = min(n_avail, max(1, need))
+        ok = need <= n_avail
+        txt = (f"依成效資料推算（{cond}，已驗證）：每台約可多降 {per_fan:.2f}／2h，"
+               f"要從 {peak:.1f} 降到 {target} 以下需降 {gap:.1f}，開 {hours} 小時需 {need} 台")
+        if not ok:
+            txt += f"；全開 {n_avail} 台預估只能降 {drop_each * n_avail:.1f}，需搭配噴霧、遮陽、增加飲水"
+        return {"n": n, "模式": "成效推算", "說明": txt, "足夠": ok}
+    rough = ""
+    if e is not None and e < 0 and target == 79:
+        drop_all = -e / fans_mean * n_avail * hours / 2
+        rough = (f"；以目前不完整的資料粗估，全開 {hours} 小時約可多降 {drop_all:.1f}"
+                 + (f"，可能不足以降到 {target} 以下" if drop_all < gap else "") + "（僅供參考）")
+    if target == 79:
+        cost = n_avail * FAN_KW * PRICE
+        txt = (f"風扇效果尚未驗證（{cond}；需 ≥{MIN_SAMPLES} 筆且單尾 95% 顯著），無法從資料推算台數"
+               f"{'；現場紀錄中 ' + format(eff['all_on_share'], '.0%') + ' 的開啟時段是全部同時開，無法區分台數差異' if eff.get('all_on_share') is not None else ''}"
+               f" → 採保守策略全開：全開電費約 NT${cost:.0f}／小時，遠低於熱緊迫損失，且全開才能累積成效樣本{rough}")
+        return {"n": n_avail, "模式": "保守全開", "說明": txt, "足夠": None}
+    n = max(1, n_avail // 2)
+    txt = (f"警戒級且風扇效果尚未驗證（{cond}）→ 試驗開 {n} 台，與危險級全開 {n_avail} 台形成對照，"
+           f"累積不同台數的成效資料，之後即可推算每台效果{rough}")
+    return {"n": n, "模式": "試驗", "說明": txt, "足夠": None}
+
+
 def sheep_rule(row) -> int:
-    """建議開啟風扇台數（也用於閉環回放）。THI 74–78：2 台；≥79：4 台。"""
-    thi = row.get("thi")
-    if thi is None or pd.isna(thi):
-        return 0
-    return 4 if thi >= 79 else (2 if thi >= 74 else 0)
+    """建議開啟風扇台數（閉環回放用：以效果未驗證時的規則回放，與現場實際操作對照）。"""
+    return fan_plan(row.get("thi"))["n"]
 
 
 def build_sheep(site, ctx):
@@ -148,7 +196,8 @@ def build_sheep(site, ctx):
     fc = A.forecast(site["clean"]["thi"], key="sheep:thi")
     peak6 = max(fc["pred"]) if fc else thi
     eta79 = A.time_to_threshold(fc, 79)
-    eff = _effects()
+    # 成效只用「當下」以前的現場紀錄計算（回放時樣本會隨時間累積，即閉環再學習）
+    eff = {e["action"]: e for e in F.sheep_effects(site)[0]}
     fan_eff = eff.get("風扇開啟", {})
     shade_eff = eff.get("南遮陽張開", {})
     rain = site["df"]["rain_1h"].iloc[-1] if "rain_1h" in site["df"] else 0
@@ -184,19 +233,17 @@ def build_sheep(site, ctx):
         diags.append(diag("控制器異常碼", "控制器／通訊模組回報異常（所有設備同時出現 2/4 碼）",
                           f"異常碼時段：{', '.join(abn[:2])} … 共 {len(abn)} 小時，全部 16 個設備點位同時異常", "中"))
 
-    fans = sheep_rule({"thi": max(thi, peak6)})
-    n_fan = fan_eff.get("n", 0)
-    fan_txt = (f"歷史回饋：開風扇後 THI 比同時段平常 {fan_eff['effect']:+.2f}/h（n={n_fan}，"
-               f"{'已驗證' if fan_eff.get('verified') else '樣本不足、尚未達統計驗證'}）") if fan_eff else "尚無回饋資料"
+    plan = fan_plan(max(thi, peak6), fan_eff)
+    fans = plan["n"]
     decs = []
     if fans:
-        hrs = 4
+        hrs = FAN_HOLD_H
         decs.append(decision(
             name, "風扇-03／04／07／08", "開啟", f"立即，至 THI 連續 2 小時 < 79（預估 {hrs} 小時）",
-            f"{fans}/4 台（{fans*25}%）",
+            f"{fans}/{FAN_COUNT} 台（{plan['模式']}）",
             f"THI {thi:.1f}（{A.LEVEL_NAME[lvl]}），未來 6 小時預測最高 {peak6:.1f}"
             + (f"，{eta79} 小時後達危險級" if eta79 and thi < 79 else ""),
-            fan_txt, "低", tr, bool(fan_eff.get("verified")),
+            plan["說明"], "低", tr, bool(fan_eff.get("verified")),
             "THI 讀值不可信 → 改用平均溫濕度重算 THI；溫濕度也失效 → 依時段排程 10–17 時全開",
             cost=f"約 NT${fans*FAN_KW*hrs*PRICE:.0f}（{fans} 台×{FAN_KW}kW×{hrs}h，電價假設 NT${PRICE}/kWh）",
             priority=1 if lvl >= 2 else 2))
@@ -204,7 +251,7 @@ def build_sheep(site, ctx):
         decs.append(decision(
             name, "南遮陽 25/26", "張開", "立即，至 16 時", "全幅",
             f"日照時段（{hour} 時）且舍溫 {temp:.1f}°C",
-            f"歷史回饋：遮陽張開後 THI {shade_eff.get('effect', 0):+.2f}/h（n={shade_eff.get('n',0)}，未見顯著效果）",
+            f"歷史回饋：遮陽張開時 THI 比同時段平常 {shade_eff.get('effect', 0):+.2f}（前後 2 小時變化量，n={shade_eff.get('n',0)}，未見顯著效果）",
             "低", tr, bool(shade_eff.get("verified")), "遮陽馬達無回授 → 維持現狀並派員目視", priority=3))
     if rain and rain > 0:
         decs.append(decision(name, "南／北／西帆布", "張開（擋雨）", "立即", "全幅",
@@ -214,9 +261,11 @@ def build_sheep(site, ctx):
         decs.append(decision(name, "南／北／西帆布", "維持收起（通風）", "持續", "—",
                              "無降雨，帆布收起以利自然通風", "維持換氣量", "中", tr, False,
                              "遇雨或強風（風速>8 m/s）→ 人工確認後張開", priority=3))
-    if lvl == 3 or peak6 >= 84:
+    if lvl == 3 or peak6 >= 84 or plan["足夠"] is False:
+        why = (f"THI 達或預測達緊急級（{max(thi, peak6):.1f}）" if (lvl == 3 or peak6 >= 84)
+               else f"依成效資料推算，風扇全開仍不足以讓 THI 從 {max(thi, peak6):.1f} 降到目標以下")
         decs.append(decision(name, "飲水／噴霧（人工）", "增加飲水供應、啟動噴霧降溫", "立即",
-                             "全區", f"THI 達或預測達緊急級（{max(thi, peak6):.1f}）",
+                             "全區", why,
                              "降低熱休克與採食下降風險", "高", tr, False, "現場人員巡檢羊隻呼吸頻率", priority=1))
     if nh3_stuck:
         decs.append(decision(name, "成羊區 NH3 量測", "停用平均值，改用 ID4 NH3", "立即", "—",
@@ -256,7 +305,7 @@ def build_expert(site, ctx):
     fc_do = A.forecast(c["do1"], key="expert:do1")
     fc_cur = A.forecast(c["current"], key="expert:current")
     motor = A.motor_stop_model(df, key="expert:motor")
-    mstop = ctx["motor_effect"]
+    mstop = F.verify_expert(site)          # 只用當下以前的資料驗證馬達成效
     pf = float(df["pf"].iloc[-168:].mean())
     kwh7 = (float(df["kwh"].iloc[-1] - df["kwh"].iloc[-169])
             if len(df) >= 169 and df["kwh"].iloc[-169] > 0 else None)   # 不足 7 天資料時不計算

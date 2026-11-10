@@ -40,7 +40,8 @@ def action_effect(raw: pd.DataFrame, df: pd.DataFrame, mask: pd.Series, name: st
             "target": target, "note": "負值=動作後 THI 比同時段平常多降（或少升）"}
 
 
-def verify_sheep(site: dict) -> dict:
+def sheep_effects(site: dict):
+    """依傳入的資料（決策引擎回放時已切到當下時間）計算風扇、遮陽、帆布的成效，不偷看未來。"""
     raw, df = site["raw"], site["clean"]
     st = device_status(raw)
     ok = ~raw.index.isin(st["abnormal_hours"])
@@ -50,6 +51,16 @@ def verify_sheep(site: dict) -> dict:
     effects = [action_effect(raw, df, fans_on, "風扇開啟"),
                action_effect(raw, df, shade_on, "南遮陽張開"),
                action_effect(raw, df, canvas_on, "南右帆布張開")]
+    n_on = (raw[FANS] == 1).sum(axis=1)[fans_on]
+    if len(n_on):   # 開啟時平均同時開幾台、全部同時開的比例 → 推算每台效果用
+        effects[0]["fans_mean"] = float(n_on.mean())
+        effects[0]["all_on_share"] = float((n_on == len(FANS)).mean())
+        effects[0]["fan_counts"] = {int(k): int(v) for k, v in n_on.value_counts().sort_index().items()}
+    return effects, st, fans_on, shade_on, canvas_on
+
+
+def verify_sheep(site: dict) -> dict:
+    effects, st, fans_on, shade_on, canvas_on = sheep_effects(site)
     db = {e["action"]: e for e in effects}
     EFFECT_DB.parent.mkdir(exist_ok=True)
     EFFECT_DB.write_text(json.dumps(db, ensure_ascii=False, indent=2, default=float), encoding="utf-8")

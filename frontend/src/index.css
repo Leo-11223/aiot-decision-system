@@ -324,3 +324,21 @@ table.audit tr.inactive td { opacity: 0.5; }
 .commands button { margin-top: 6px; }
 .ctl-kind { display: inline-block; font-size: 11px; padding: 0 6px; margin-right: 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
 .ctl-kind.device { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- 預測準度（每週重訓） ---------- */
+.accuracy { display: grid; gap: 14px; }
+.acc-block { min-width: 0; }
+.acc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.acc-head b { font-size: 15px; }
+.acc-method { font-size: 12px; color: var(--muted); }
+.accuracy .meta { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.accuracy table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.accuracy th, .accuracy td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.accuracy th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.accuracy td { font-family: var(--num); font-size: 15px; }
+.acc-block { overflow-x: auto; }
+.acc-status { font-family: var(--font); font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.acc-status.ok { color: var(--lvl-0); }
+.acc-status.warn { color: var(--lvl-1); }
+.acc-status.bad { color: var(--lvl-3); }
+.acc-status.muted { color: var(--muted); }

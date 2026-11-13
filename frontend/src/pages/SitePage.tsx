@@ -3,6 +3,7 @@ import { api, feedbackApi } from '../api'
 import type { Decision, Outcome, Series, Snapshot, Timeline } from '../api'
 import { ControlPanel } from '../components/ControlPanel'
 import { DecisionList } from '../components/DecisionList'
+import { ForecastAccuracy } from '../components/ForecastAccuracy'
 import { OutcomeList } from '../components/OutcomeList'
 import { LineChart } from '../components/LineChart'
 import type { ChartSeries } from '../components/LineChart'
@@ -236,6 +237,11 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
             ) : (
               <div className="chart placeholder" />
             )}
+          </section>
+
+          <section className="panel">
+            <h2>預測準度（每週重訓）</h2>
+            {snap ? <ForecastAccuracy forecasts={snap.forecast} /> : <p className="empty">載入中</p>}
           </section>
 
           <section className="panel">

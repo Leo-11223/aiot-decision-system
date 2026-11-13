@@ -1,6 +1,7 @@
 """決策引擎服務層：啟動時載入資料、訓練模型一次；之後可對「任一時間點」快速產生決策快照。
 
-時間切片的原則：只用該時間點（含）以前的資料，模型只用訓練期資料，所以回放時不會偷看未來。
+時間切片的原則：只用該時間點（含）以前的資料；預測、停機、異常偵測模型每週以「到那天為止」的資料重訓，
+回放到 t 時只用 t 以前最後一次重訓的模型，所以完全不會偷看未來。
 """
 import hashlib
 import threading
@@ -15,6 +16,13 @@ from aiot import decision as D
 from aiot import feedback as F
 from aiot.config import SITES
 from aiot.data import load_all
+
+
+# 要做滾動重訓的預測：key → (場域, 欄位)；key 與 decision.py 呼叫 A.forecast 時相同
+FORECAST_KEYS = {"sheep:thi": ("sheep", "thi"), "expert:do1": ("expert", "do1"), "expert:current": ("expert", "current"),
+                 "river:do": ("river", "do"), "river:ec": ("river", "ec"), "breed1:pm25": ("breed1", "pm25"),
+                 "northeast:pm25": ("northeast", "pm25"),
+                 "site:pm10": ("site", "pm10")}
 
 
 def jsonable(o):
@@ -46,9 +54,16 @@ class Engine:
         step("資料載入與清洗完成")
         self.verify = F.verify_sheep(self.sites["sheep"])          # 寫入成效資料庫
         self.motor_effect = F.verify_expert(self.sites["expert"])
-        self.anomalies = {sid: A.detect_anomalies(s["clean"], s["cfg"]["anomaly"], s["baseline"])
+        # 異常偵測：每週以「到那天為止」的資料重建基準與模型，只套用到之後的資料
+        self.anomalies = {sid: A.detect_anomalies_rolling(s["clean"], s["cfg"]["anomaly"])
                           for sid, s in self.sites.items()}
-        step("成效驗證與異常偵測完成")
+        step("成效驗證與滾動異常偵測完成")
+        # 預測與停機模型：每週擴展視窗重訓（見 analysis.build_forecast_roll）
+        for key, (sid, col) in FORECAST_KEYS.items():
+            if sid in self.sites and col in self.sites[sid]["clean"]:
+                A.build_forecast_roll(self.sites[sid]["clean"][col], key)
+        A.build_motor_roll(self.sites["expert"]["df"], "expert:motor")
+        step(f"滾動重訓完成（每 {A.RETRAIN_DAYS} 天一次）")
         self._cache = OrderedDict()
         self._cache_size = cache_size
         self._lock = threading.Lock()
@@ -64,13 +79,15 @@ class Engine:
     def __getstate__(self):
         st = dict(self.__dict__)
         st.pop("_lock", None)  # 執行緒鎖無法存檔
-        st["_model_cache"] = (A._FC_CACHE, A._MOTOR_CACHE)  # 已訓練模型放在模組層級，一起存
+        st["_model_cache"] = (A._FC_CACHE, A._MOTOR_CACHE, A._ROLL, A._MOTOR_ROLL)  # 已訓練模型放在模組層級，一起存
         return st
 
     def __setstate__(self, st):
-        fc, motor = st.pop("_model_cache", ({}, {}))
+        fc, motor, roll, mroll = st.pop("_model_cache", ({}, {}, {}, {}))
         A._FC_CACHE.update(fc)
         A._MOTOR_CACHE.update(motor)
+        A._ROLL.update(roll)
+        A._MOTOR_ROLL.update(mroll)
         self.__dict__.update(st)
         self._lock = threading.Lock()
 
@@ -110,7 +127,7 @@ class Engine:
                "replay": F.replay_sheep(site, D.sheep_rule) if sid == "sheep" else None}
         r = D.BUILDERS[sid](site, ctx)
         an_full = self.anomalies[sid]
-        an = {"flag": an_full["flag"].loc[:t], "events": [e for e in an_full["events"] if e["end"] <= t]}
+        an = {"flag": an_full["flag"].loc[:t], "events": self._events_until(an_full, t)}
         r["anomaly"] = D._anom_summary(site, an)
         r["trust_now"] = {k: round(float(v), 1) for k, v in site["trust"].iloc[-6:].mean().items()}
         r["site_id"], r["name"], r["domain"] = sid, site["cfg"]["name"], site["cfg"]["domain"]
@@ -131,6 +148,17 @@ class Engine:
             if len(self._cache) > self._cache_size:
                 self._cache.popitem(last=False)
         return r
+
+    @staticmethod
+    def _events_until(an_full, t):
+        """t 以前的異常事件；跨過 t 的進行中事件只算到 t 為止（只用 t 以前的資料重算）。"""
+        out = []
+        for e in an_full["events"]:
+            if e["end"] <= t:
+                out.append(e)
+            elif e["start"] <= t:
+                out += A._events(an_full["flag"].loc[e["start"]:t], an_full["z"].loc[e["start"]:t])
+        return out
 
     # ------------------------------------------------------------ 時間序列
     def series(self, sid, cols, at=None, hours=72, step=1):

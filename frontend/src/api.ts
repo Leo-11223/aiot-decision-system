@@ -103,6 +103,29 @@ export type Forecast = {
   上界: (number | null)[]
   改善率: number
   單位: string
+  模型MAE?: number[]
+  持續法MAE?: number[]
+  模型版本?: ModelVersion | null
+  準度追蹤?: Tracking[] | null
+}
+
+// 每週擴展視窗重訓：目前使用第幾次重訓的模型
+export type ModelVersion = {
+  重訓次數: number
+  重訓時間: string | null
+  訓練資料時數: number
+  下次重訓: string | null
+  每幾天重訓: number
+}
+
+// 預測準度追蹤：近 7 天「當時的預測」與後來真實結果的誤差
+export type Tracking = {
+  時距: number
+  近期誤差: number | null
+  近期持續法誤差: number | null
+  訓練時誤差: number | null
+  樣本: number
+  狀態: '正常' | '誤差變大' | '不如持續法' | '樣本不足'
 }
 
 export type Snapshot = {

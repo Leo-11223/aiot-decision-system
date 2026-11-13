@@ -76,10 +76,11 @@ def sensor_trust(site: dict) -> pd.DataFrame:
         rng = VALID_RANGE.get(_range_key(cfg, c))
         if rng:
             hit((s < rng[0]) | (s > rng[1]), c, 0, "超出物理範圍", floor=True)
+        # 突波：與「過去 30 天」的變化量分布比較（只用當下以前的資料，回放時不偷看未來）
         d = s.diff()
-        mad = (d - d.median()).abs().median()
-        if mad and mad > 0:
-            hit(((d - d.median()).abs() / (1.4826 * mad)) > 6, c, 50, "突波")
+        med = d.rolling(720, min_periods=48).median().shift(1)
+        mad = (d - med).abs().rolling(720, min_periods=48).median().shift(1)
+        hit(((d - med).abs() / (1.4826 * mad.where(mad > 0))) > 6, c, 50, "突波")
         if c not in ("battery", "batt_v"):  # 電池充飽維持 100% 屬正常
             stuck = s.rolling(12).apply(lambda x: np.nanmax(x) - np.nanmin(x) == 0, raw=True) == 1
             saturated = (s >= 99.5) & (c in ("rh",))  # 濕度飽和 100% 屬正常
@@ -126,12 +127,13 @@ def peer_check(sites: dict) -> None:
 
 # ------------------------------------------------------------------ 清洗後資料 + 基準
 def clean(site: dict) -> pd.DataFrame:
-    """可信度 < 50 的讀值視為無效 → NaN，短缺口（≤3h）線性補值，長缺口保留空白。"""
+    """可信度 < 50 的讀值視為無效 → NaN；短缺口（≤3h）沿用前一筆有效值，長缺口保留空白。
+    不用前後內插：內插會用到缺口之後（未來）的讀值，回放時等於偷看未來。"""
     df = site["df"].copy()
     t = site["trust"]
     for c in t.columns:
         df.loc[t[c] < 50, c] = np.nan
-        df[c] = df[c].interpolate(limit=3, limit_area="inside")
+        df[c] = df[c].ffill(limit=3)
     return df
 
 

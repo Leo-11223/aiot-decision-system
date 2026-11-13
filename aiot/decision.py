@@ -104,7 +104,8 @@ def _fc_summary(fc, name, unit=""):
     return {"變數": name, "方法": fc["method"], "現值": fc["now"], "預測": [round(p, 2) for p in fc["pred"]],
             "下界": [round(p, 2) for p in fc["lo"]], "上界": [round(p, 2) for p in fc["hi"]],
             "模型MAE": [round(m, 3) for m in fc["mae_model"]], "持續法MAE": [round(m, 3) for m in fc["mae_naive"]],
-            "改善率": round(fc["skill"] * 100, 1), "單位": unit}
+            "改善率": round(fc["skill"] * 100, 1), "單位": unit,
+            "模型版本": fc.get("version"), "準度追蹤": fc.get("tracking")}
 
 
 def _effects():
@@ -366,7 +367,8 @@ def build_expert(site, ctx):
     for k in bad_sc:
         decs.append(decision(name, f"{k.upper()} 探棒", "自控制邏輯中排除", "立即", "—", f"{k.upper()} 與另兩支 SC 不一致",
                              "SC 以其餘探棒中位數判斷", "低", _trust_now(site, k), False, "派工校正", priority=3))
-    decs.append(decision(name, "CPM 馬達", f"列入例行巡檢（模型估 24h 停機機率 {motor['p_now']:.1%}）", "下次例行巡檢",
+    decs.append(decision(name, "CPM 馬達", (f"列入例行巡檢（模型估 24h 停機機率 {motor['p_now']:.1%}）" if motor.get("version") is None or motor["version"]["重訓次數"]
+                          else f"列入例行巡檢（模型尚未訓練，歷史停機頻率 {motor['p_now']:.1%}）"), "下次例行巡檢",
                          "—", f"近 7 日平均電流 {motor['cur_mean7d']:.2f} A（全期 {motor['cur_mean_all']:.2f} A），無劣化趨勢",
                          "維持設備可用率", "低", _trust_now(site, "current"), True, "—", priority=3))
 
@@ -386,7 +388,8 @@ def build_expert(site, ctx):
     return {"status": status, "diagnoses": diags, "decisions": decs, "work_orders": wos,
             "forecast": [_fc_summary(fc_do, "DO1", "mg/L"), _fc_summary(fc_cur, "馬達電流", "A")],
             "equipment": {"馬達24h停機機率": round(motor["p_now"], 3), "測試AUC": None if motor["auc"] is None else round(motor["auc"], 3),
-                          "基準停機率": round(motor["base_rate"], 3), "近7日用電kWh": None if kwh7 is None else round(kwh7, 1),
+                          "基準停機率": round(motor["base_rate"], 3),
+                          "停機模型": motor.get("method"), "模型重訓次數": (motor.get("version") or {}).get("重訓次數"), "近7日用電kWh": None if kwh7 is None else round(kwh7, 1),
                           "平均功率因數": round(pf, 3)}}
 
 

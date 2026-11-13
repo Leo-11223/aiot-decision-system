@@ -45,6 +45,7 @@ export function DecisionList({ decisions, onReview }: Props) {
               <span className="action">{d.動作}</span>
             </h4>
           </header>
+          {d.一句話 && <p className="plain">{d.一句話}</p>}
           <dl>
             <div>
               <dt>理由</dt>

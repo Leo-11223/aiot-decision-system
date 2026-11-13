@@ -43,6 +43,7 @@ export type Decision = {
   成本: string
   優先: number
   審核: Review | null
+  一句話?: string
   控制指令: ControlPlan
 }
 
@@ -148,6 +149,7 @@ export type Snapshot = {
   work_orders: WorkOrder[]
   forecast: (Forecast | null)[]
   trust_now: Record<string, number>
+  白話?: { 現在: string; 接下來: string; 該做什麼: string }
 }
 
 export type TimelineEvent = {

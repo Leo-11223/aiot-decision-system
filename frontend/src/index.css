@@ -342,3 +342,25 @@ table.audit tr.inactive td { opacity: 0.5; }
 .acc-status.warn { color: var(--lvl-1); }
 .acc-status.bad { color: var(--lvl-3); }
 .acc-status.muted { color: var(--muted); }
+
+/* ---------- 白話總結（三個問題） ---------- */
+.plain-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
+.plain-summary > div { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--radius); padding: 10px 14px; min-width: 0; }
+.plain-summary span { display: block; font-size: 12px; color: var(--accent); letter-spacing: .05em; margin-bottom: 4px; }
+.plain-summary p { margin: 0; font-size: 14px; line-height: 1.6; }
+@media (max-width: 900px) { .plain-summary { grid-template-columns: minmax(0, 1fr); } }
+.decision .plain { margin: 4px 0 8px; font-size: 13.5px; line-height: 1.6; color: var(--text); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 6px; padding: 6px 10px; }
+
+/* ---------- 即時模式與通知 ---------- */
+.live-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; font-size: 13px; color: var(--muted); margin: -4px 0 14px; }
+.live-bar b { color: var(--text); }
+.live-bar label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.toasts { position: fixed; top: 72px; right: 16px; z-index: 50; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); }
+.toast { text-align: left; display: grid; gap: 2px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--panel-2); color: var(--text); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); cursor: pointer; font: inherit; animation: toast-in .2s ease-out; }
+.toast b { font-size: 13px; }
+.toast span { font-size: 13px; color: var(--muted); }
+.toast.up { border-left-color: var(--lvl-3); }
+.toast.down { border-left-color: var(--lvl-0); }
+.toast.action { border-left-color: var(--lvl-1); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }

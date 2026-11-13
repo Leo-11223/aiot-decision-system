@@ -8,6 +8,8 @@ import { OutcomeList } from '../components/OutcomeList'
 import { LineChart } from '../components/LineChart'
 import type { ChartSeries } from '../components/LineChart'
 import { TimeBar } from '../components/TimeBar'
+import { Toasts } from '../components/Toasts'
+import type { Toast } from '../components/Toasts'
 import { HOUR, SITE_CHART, fmtNum, fmtTime, levelVar, sensorLabel, toApi, toMs } from '../util'
 
 const SERIES_COLORS = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)']
@@ -30,6 +32,10 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [cmdKey, setCmdKey] = useState(0)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [autoPause, setAutoPause] = useState(true)
+  const prevSnap = useRef<Snapshot | null>(null)
+  const toastId = useRef(0)
   const reqId = useRef(0)
 
   const chart = SITE_CHART[siteId]
@@ -60,6 +66,36 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [siteId])
 
+  // 即時模式：播放中比較前後兩個時間點，有新狀況就通知；有新的待核准決策可自動暫停
+  const playingRef = useRef(false)
+  playingRef.current = playing
+  const autoPauseRef = useRef(autoPause)
+  autoPauseRef.current = autoPause
+  const notifyChanges = (prev: Snapshot | null, s: Snapshot) => {
+    if (!prev || !playingRef.current || prev.site_id !== s.site_id) return
+    const add: Toast[] = []
+    const push = (kind: Toast['kind'], title: string, body: string) =>
+      add.push({ id: ++toastId.current, kind, title, body })
+    const at = s.at.replace('T', ' ').slice(5, 16)
+    if (prev.status.等級碼 !== s.status.等級碼) {
+      const up = s.status.等級碼 > prev.status.等級碼
+      push(up ? 'up' : 'down', `${at} 等級${up ? '升高' : '降低'}`, `${s.status.指數} ${s.status.數值 ?? '—'}：${prev.status.等級} → ${s.status.等級}`)
+    }
+    const oldDiag = new Set(prev.diagnoses.map((d) => d.問題))
+    s.diagnoses.filter((d) => !oldDiag.has(d.問題)).slice(0, 2).forEach((d) => push('info', `${at} 新診斷`, d.問題))
+    const key = (d: Decision) => d.設備 + d.動作.replace(/[0-9.]+%?/g, '')
+    const oldDec = new Set(prev.decisions.map(key))
+    const fresh = s.decisions.filter((d) => !oldDec.has(key(d)) && !/維持|待命/.test(d.動作))
+    fresh.forEach((d) => {
+      if (d.執行模式 === '人工確認') push('action', `${at} 新決策待核准`, `${d.設備}：${d.動作}`)
+      else if (d.執行模式 === '自動執行' && d.控制指令?.類型 === '設備指令') push('info', `${at} 系統自動下發`, `${d.設備}：${d.動作}`)
+    })
+    if (!add.length) return
+    setToasts((t) => [...t, ...add].slice(-6))
+    if (autoPauseRef.current && fresh.some((d) => d.執行模式 === '人工確認')) setPlaying(false)
+  }
+  const closeToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), [])
+
   // 2. 當下時間改變 → 稍等一下（拖動停止）再向後端要快照與曲線
   const aggStep = windowH > 200 ? 6 : 1
   const load = useCallback(
@@ -74,6 +110,8 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
           feedbackApi.outcomes(siteId, atStr),
         ])
         if (id !== reqId.current) return // 已有更新的請求，丟掉舊結果
+        notifyChanges(prevSnap.current, s)
+        prevSnap.current = s
         setSnap(s)
         setSeries(ser)
         setOutcomes(oc)
@@ -185,7 +223,35 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
         }
       />
 
+      <div className="live-bar">
+        <span>
+          <b>即時模式</b>：按「播放」讓時間一小時一小時往前走，就像資料即時進來；有新狀況會在右上角通知。
+        </span>
+        <label>
+          <input type="checkbox" checked={autoPause} onChange={(e) => setAutoPause(e.target.checked)} />
+          有新決策待核准時自動暫停
+        </label>
+      </div>
+      <Toasts items={toasts} onClose={closeToast} />
+
       {error && <p className="error">讀取失敗：{error}</p>}
+
+      {snap?.白話 && (
+        <section className="plain-summary" aria-label="一句話總結">
+          <div>
+            <span>現在發生什麼</span>
+            <p>{snap.白話.現在}</p>
+          </div>
+          <div>
+            <span>接下來會怎樣</span>
+            <p>{snap.白話.接下來}</p>
+          </div>
+          <div>
+            <span>現在該做什麼</span>
+            <p>{snap.白話.該做什麼}</p>
+          </div>
+        </section>
+      )}
 
       <div className="site-grid">
         <div className="col-main">

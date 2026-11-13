@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from aiot import analysis as A
+from aiot import explain as X
 from aiot import decision as D
 from aiot import feedback as F
 from aiot.config import SITES
@@ -143,6 +144,10 @@ class Engine:
             w["id"] = short_id(sid, w["工單"])
             w["site_id"] = sid
         r = jsonable(r)
+        # 白話說明（命題的三個問題）與每個決策的一句話
+        r["白話"] = X.site_summary(r, site["cfg"], self.INDICATOR[sid])
+        for d in r["decisions"]:
+            d["一句話"] = X.decision_line(d)
         with self._lock:
             self._cache[key] = r
             if len(self._cache) > self._cache_size:

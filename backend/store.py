@@ -109,6 +109,12 @@ class Store:
             rows = self.conn.execute("SELECT * FROM commands WHERE status='已下發' AND sent_at<=?", (cutoff,)).fetchall()
         return [self._command(r) for r in rows]
 
+    def last_decision_command(self, decision_id):
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM commands WHERE decision_id=? ORDER BY id DESC LIMIT 1",
+                                    (decision_id,)).fetchone()
+        return self._command(row) if row else None
+
     def last_device_command(self, site_id, device):
         with self.lock:
             row = self.conn.execute("SELECT * FROM commands WHERE site_id=? AND device=? ORDER BY id DESC LIMIT 1",

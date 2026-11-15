@@ -53,7 +53,7 @@ class Engine:
         step = lambda msg: print(f"  [{time.time() - t0:5.0f} 秒] {msg}", flush=True)
         self.sites = load_all()
         step("資料載入與清洗完成")
-        self.verify = F.verify_sheep(self.sites["sheep"])          # 寫入成效資料庫
+        self.verify = F.verify_sheep(self.sites["sheep"])          # 控制器異常時段等（不寫檔）
         self.motor_effect = F.verify_expert(self.sites["expert"])
         # 異常偵測：每週以「到那天為止」的資料重建基準與模型，只套用到之後的資料
         self.anomalies = {sid: A.detect_anomalies_rolling(s["clean"], s["cfg"]["anomaly"])
@@ -98,11 +98,18 @@ class Engine:
         return idx[0], idx[-1]
 
     def resolve_time(self, sid, at=None):
-        """把使用者給的時間對齊到整點並限制在資料範圍內；沒給就用最後一筆。"""
+        """把使用者給的時間對齊到整點並限制在資料範圍內；沒給就用最後一筆。
+        at 無法解析時丟出 ValueError（API 轉成 422）。"""
         lo, hi = self.time_range(sid)
         if at is None:
             return hi
-        t = pd.Timestamp(at).floor("h")
+        try:
+            t = pd.Timestamp(at)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"時間格式錯誤：{at}（請用 2026-07-20T14:00）") from e
+        if pd.isna(t):
+            raise ValueError(f"時間格式錯誤：{at}")
+        t = t.floor("h")
         if t.tzinfo is not None:
             t = t.tz_localize(None)
         min_t = lo + pd.Timedelta(hours=72)   # 至少要有 3 天歷史才能算滾動特徵
@@ -130,6 +137,14 @@ class Engine:
         an_full = self.anomalies[sid]
         an = {"flag": an_full["flag"].loc[:t], "events": self._events_until(an_full, t)}
         r["anomaly"] = D._anom_summary(site, an)
+        # 正在發生的多變數異常（每小時基準偏離＋IsolationForest）→ 列入異常診斷
+        live = [e for e in an["events"] if e["end"] >= t - pd.Timedelta(hours=1) and e["hours"] >= 2]
+        for e in live[-1:]:
+            what = "、".join(f"{D.LABELS.get(k, k.upper())} {e['direction'].get(k, '')}" for k in e["vars"])
+            r["diagnoses"].append(D.diag(
+                "多變數異常進行中", "與同時段歷史基準明顯不同；可能是現場狀況改變，也可能是感測器問題",
+                f"{e['start'].strftime('%m/%d %H:%M')} 起持續 {e['hours']} 小時，主要是 {what}（偏離基準最大 z={e['peak']:.0f}）；"
+                "由每週重建的歷史基準與 IsolationForest 偵測", "中" if e["peak"] < 10 else "高"))
         r["trust_now"] = {k: round(float(v), 1) for k, v in site["trust"].iloc[-6:].mean().items()}
         r["site_id"], r["name"], r["domain"] = sid, site["cfg"]["name"], site["cfg"]["domain"]
         r["at"] = t
@@ -143,6 +158,12 @@ class Engine:
         for w in r["work_orders"]:
             w["id"] = short_id(sid, w["工單"])
             w["site_id"] = sid
+        # 資料延遲：主要感測值最後一筆有效讀值距離當下幾小時（斷線時狀態不能當成即時）
+        keys = [k for k in site["cfg"]["key"] if k in site["clean"]]
+        valid = site["clean"][keys].dropna(how="all").index if keys else site["clean"].index
+        last_ok = valid[-1] if len(valid) else None
+        r["status"]["資料時間"] = last_ok
+        r["status"]["資料延遲(h)"] = None if last_ok is None else int((t - last_ok) / pd.Timedelta(hours=1))
         r = jsonable(r)
         # 白話說明（命題的三個問題）與每個決策的一句話
         r["白話"] = X.site_summary(r, site["cfg"], self.INDICATOR[sid])
@@ -246,13 +267,15 @@ class Engine:
             if e["hours"] >= 3:
                 events.append({"type": "異常", "start": e["start"], "end": e["end"], "hours": e["hours"],
                                "detail": "、".join(e["vars"])})
-        # 長期失效的感測器（全期平均可信度 <50）已有專門診斷，不在時間軸上重複標記
-        tr = s["trust"][[k for k in s["trust"].columns if s["trust"][k].mean() >= 50]]
-        low = (tr.min(axis=1) < 50) & s["raw"].notna().any(axis=1)
+        # 長期失效的感測器已有專門診斷，不在時間軸上重複標記。
+        # 「長期失效」以過去 7 天平均可信度 <50 判斷（只看過去，不用全期平均）
+        tr = s["trust"]
+        dead = tr.rolling(168, min_periods=24).mean().shift(1) < 50
+        low = ((tr < 50) & ~dead).any(axis=1) & s["raw"].notna().any(axis=1)
         for a, b in runs(low):
             h = int((b - a) / pd.Timedelta(hours=1)) + 1
             if h >= 3:
-                bad = tr.loc[a:b].mean()
+                bad = (tr.loc[a:b].where(~dead.loc[a:b])).mean()
                 events.append({"type": "感測器", "start": a, "end": b, "hours": h,
                                "detail": "、".join(bad[bad < 50].index[:3])})
         events.sort(key=lambda e: e["start"])

@@ -6,9 +6,12 @@
 3. 規則學習：統計每條規則的核准／駁回；駁回率過高 → 建議檢討規則；
    成效樣本數達門檻且統計顯著 → 該動作才可升級為自動執行。
 """
+import re
+
 import pandas as pd
 
-from aiot.config import MIN_SAMPLES, REVIEW_FLAG_MIN, Z_ONE_SIDED
+from aiot import feedback as F
+from aiot.config import MIN_SAMPLES, REVIEW_FLAG_MIN, SITES, Z_ONE_SIDED
 from aiot.feedback import FANS
 
 
@@ -22,16 +25,22 @@ GOALS = [
      "text": "THI 連續 2 小時低於 79", "effect_key": "南遮陽張開"},
     {"site": "expert", "match": "CPM 馬達（打氣", "metric": "do", "op": ">=", "value": 4.5, "hold": 3, "deadline": 24,
      "text": "DO 共識值連續 3 小時 ≥ 4.5 mg/L", "effect_key": "馬達運轉"},
-    {"site": "site", "match": "灑水", "metric": "pm10", "op": "<", "value": 126, "hold": 2, "deadline": 6,
-     "text": "PM10 連續 2 小時低於 126", "effect_key": None},
+    {"site": "site", "match": "灑水", "metric": "pm10", "op": "<", "value": SITES["site"]["thresholds"]["pm10"][0],
+     "hold": 2, "deadline": 6, "text": f"PM10 連續 2 小時低於 {SITES['site']['thresholds']['pm10'][0]}", "effect_key": None},
 ]
 
 
 def goal_for(decision: dict):
+    act = decision.get("動作", "")
+    if decision.get("執行模式") == "維持現狀" or any(k in act for k in ("維持", "待命", "巡檢", "關閉", "恢復", "停止")):
+        return None  # 不動作或「解除」類決策沒有要追蹤的改善目標
     for g in GOALS:
         if decision.get("site_id") == g["site"] and g["match"] in decision.get("設備", ""):
-            if "維持" in decision.get("動作", "") or "待命" in decision.get("動作", "") or "巡檢" in decision.get("動作", ""):
-                return None  # 「維持現狀」類決策沒有要追蹤的改善目標
+            # 目標與決策一致：風扇決策寫的是「< 74」（警戒級）就追蹤 74
+            m = re.search(r"<\s*(\d+(?:\.\d+)?)", decision.get("時間", ""))
+            if g["match"] == "風扇" and m and float(m.group(1)) != g["value"]:
+                v = float(m.group(1))
+                return dict(g, value=v, text=f"THI 連續 2 小時低於 {v:g}")
             return g
     return None
 
@@ -104,18 +113,43 @@ def evaluate(engine, review: dict, now: pd.Timestamp):
         left = int((deadline - now) / pd.Timedelta(hours=1))
         out.update({"狀態": "追蹤中", "說明": f"尚未達成，期限還剩 {left} 小時"})
     if executed is False:
-        out["樣本"] = "不計入成效樣本（現場未執行，環境變化不能歸功於動作）"
+        out["樣本"] = ("不計入成效樣本：歷史紀錄顯示當時現場沒有執行（回放無法改變歷史資料；"
+                     "正式上線後核准會由控制器實際執行，才會產生成效樣本）")
     elif executed:
         out["樣本"] = "計入成效樣本"
     return out
 
 
-def rule_stats(engine, reviews: list):
-    """每條規則（場域＋設備）的審核統計，以及對應動作的成效驗證進度。"""
-    effects = {e["action"]: e for e in engine.verify["effects"]}
-    me = engine.motor_effect
-    effects["馬達運轉"] = {"action": "馬達運轉", "n": me["n"], "effect": me["level_gap_same_hour"], "se": None,
-                       "verified": me["verified"], "note": "停機時 DO 比同時段運轉時低多少（負值＝運轉較好）"}
+def effects_at(engine, at=None):
+    """動作成效（只用 at 以前的資料，與快照一致）。"""
+    t_s = engine.resolve_time("sheep", at)
+    t_e = engine.resolve_time("expert", at)
+    effects = {e["action"]: e for e in F.sheep_effects(engine._slice("sheep", t_s))[0]}
+    me = F.verify_expert(engine._slice("expert", t_e))
+    effects["馬達運轉"] = {"action": "馬達運轉", "n": me["n"], "effect": me["effect"], "se": me["se"],
+                       "verified": me["verified"], "note": "停機時共識 DO 比前後 3 天同時段運轉低多少（負值＝運轉較好）"}
+    return effects
+
+
+def review_flags(reviews: list, site_id: str, until: str):
+    """人員回饋：每條規則（場域＋設備）在 until 以前的核准／駁回；駁回率高的規則回傳原因。"""
+    latest = {}
+    for r in sorted(reviews, key=lambda r: r["id"]):
+        if r["site_id"] == site_id and str(r["at"]) <= until:
+            latest[r["decision_id"]] = r
+    stats = {}
+    for r in latest.values():
+        x = stats.setdefault(r["decision"].get("設備"), {"核准": 0, "駁回": 0, "原因": []})
+        x["核准" if r["action"] == "approve" else "駁回"] += 1
+        if r["action"] == "reject" and r.get("note"):
+            x["原因"].append(r["note"])
+    return {k: v for k, v in stats.items()
+            if v["核准"] + v["駁回"] >= REVIEW_FLAG_MIN and v["駁回"] / (v["核准"] + v["駁回"]) >= 0.5}
+
+
+def rule_stats(engine, reviews: list, at=None):
+    """每條規則（場域＋設備）的審核統計，以及對應動作的成效驗證進度（只用 at 以前的資料）。"""
+    effects = effects_at(engine, at)
     latest = {}
     for r in sorted(reviews, key=lambda r: r["id"]):
         latest[r["decision_id"]] = r  # 同一決策多次審核只算最後一次

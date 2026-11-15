@@ -115,7 +115,7 @@ def detect_anomalies_rolling(clean_df, cols, contamination=0.02, every_days=None
     套用到下一段（到下次重訓前）的資料。第一次重訓前資料不足，不做偵測（基準建立中）。"""
     from .data import baseline
     every_days = every_days or RETRAIN_DAYS
-    cols = [c for c in cols if c in clean_df and clean_df[c].notna().mean() > 0.1]
+    cols = [c for c in cols if c in clean_df]
     idx = clean_df.index
     z_all = pd.DataFrame(np.nan, index=idx, columns=cols)
     score = pd.Series(0.0, index=idx)
@@ -125,11 +125,13 @@ def detect_anomalies_rolling(clean_df, cols, contamination=0.02, every_days=None
     first = None
     for i, c in enumerate(cuts):
         tr = clean_df.loc[:c]
-        valid_tr = tr[cols].notna().mean(axis=1) >= 0.6 if cols else pd.Series(False, index=tr.index)
-        if not cols or valid_tr.sum() < 100:
+        # 欄位篩選也只看到這天為止的資料（有效率 >10% 才納入），不用全期有效率
+        cc = [k for k in cols if tr[k].notna().mean() > 0.1]
+        valid_tr = tr[cc].notna().mean(axis=1) >= 0.6 if cc else pd.Series(False, index=tr.index)
+        if not cc or valid_tr.sum() < 100:
             continue
-        base = baseline(tr, cols, train_frac=1.0)          # 用到這天為止的全部資料建立基準
-        use = [k for k in cols if k in base]
+        base = baseline(tr, cc, train_frac=1.0)            # 用到這天為止的全部資料建立基準
+        use = [k for k in cc if k in base]
         zt = pd.DataFrame({k: (tr[k] - base[k]["median"].reindex(tr.index.hour).values)
                               / base[k]["scale"].reindex(tr.index.hour).values for k in use}, index=tr.index)
         Xt = zt.fillna(0).clip(-20, 20)
@@ -143,7 +145,7 @@ def detect_anomalies_rolling(clean_df, cols, contamination=0.02, every_days=None
         zs = pd.DataFrame({k: (d[k] - base[k]["median"].reindex(d.index.hour).values)
                               / base[k]["scale"].reindex(d.index.hour).values for k in use}, index=d.index)
         sc = pd.Series(-iso.score_samples(zs.fillna(0).clip(-20, 20)), index=d.index)
-        valid = d[cols].notna().mean(axis=1) >= 0.6
+        valid = d[cc].notna().mean(axis=1) >= 0.6
         z_all.loc[seg, use] = zs.values
         score[seg] = sc
         flag[seg] = ((sc > thr) | (zs.abs() > 4).any(axis=1)) & valid
@@ -387,6 +389,9 @@ def time_to_threshold(fc, cut, lower_is_bad=False):
 
 
 # ------------------------------------------------------------------ 設備故障機率
+MOTOR_MIN_AUC = 0.6   # 停機模型的驗證 AUC 至少要達 0.6 才採用（0.5 等於亂猜）
+
+
 def _motor_xy(df: pd.DataFrame, horizon=24):
     online = df["power"].fillna(0) > 5  # 功率 0 = 整台主機斷線，不算馬達停機
     cur = df["current"].where(online)
@@ -440,7 +445,9 @@ def motor_stop_model(df: pd.DataFrame, horizon=24, train_frac=0.7, key=None):
         usable = [e for e in _MOTOR_ROLL[key] if e["cutoff"] <= df.index[-1]]
         if usable:
             e = usable[-1]
-            clf_use, auc, base_rate = e["clf"], e["auc"], e["base_rate"]
+            auc, base_rate = e["auc"], e["base_rate"]
+            # 驗證 AUC 未達門檻（或無法計算）→ 不採用模型，改用歷史停機頻率（與預測模型「沒贏就不採用」同一原則）
+            clf_use = e["clf"] if auc is not None and auc >= MOTOR_MIN_AUC else None
             version = {"重訓次數": e["n"], "重訓時間": e["cutoff"]}
         else:
             # 尚無模型：以目前已有資料的停機頻率估計
@@ -455,13 +462,21 @@ def motor_stop_model(df: pd.DataFrame, horizon=24, train_frac=0.7, key=None):
         clf_use, auc, base_rate = (r["clf"], r["auc"], r["base_rate"]) if r else (None, None, float(y[ok].mean()))
         if key is not None and r:
             _MOTOR_CACHE[key] = r
-    p_now = float(clf_use.predict_proba(X.iloc[[-1]])[:, 1][0]) if clf_use is not None else base_rate
+    offline = not bool(df["power"].fillna(0).iloc[-1] > 5)
+    if offline:
+        p_now = None          # 主機斷線：沒有當下資料，不輸出機率
+    else:
+        p_now = float(clf_use.predict_proba(X.iloc[[-1]])[:, 1][0]) if clf_use is not None else base_rate
     stop_hours = df.index[stop == 1]
     by_hour = pd.Series(stop_hours.hour).value_counts().sort_index()
     return {"p_now": p_now, "auc": auc, "base_rate": base_rate, "n_stop_hours": int((stop == 1).sum()),
             "peak_hours": by_hour.sort_values(ascending=False).head(3).index.tolist(),
             "cur_mean7d": float(cur.iloc[-168:].mean()), "cur_mean_all": float(cur.mean()),
-            "method": "停機分類模型" if clf_use is not None else "歷史停機頻率（資料不足，尚未訓練模型）",
+            "offline": offline,
+            "method": ("主機斷線，不輸出停機機率" if offline else
+                       "停機分類模型" if clf_use is not None else
+                       (f"歷史停機頻率（模型驗證 AUC {auc:.2f} 未達 {MOTOR_MIN_AUC}，不採用）" if auc is not None else
+                        "歷史停機頻率（模型尚未訓練或無法驗證）")),
             "version": version}
 
 

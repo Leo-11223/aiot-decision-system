@@ -37,6 +37,7 @@ type Props = {
   onPlaying: (p: boolean) => void
   showEvents: Set<string>
   onToggleEvent: (t: string) => void
+  hideFuture?: boolean
 }
 
 export function TimeBar(p: Props) {
@@ -46,7 +47,7 @@ export function TimeBar(p: Props) {
   const idx = Math.round((p.cursor - p.minCursor) / HOUR)
 
   const important = p.timeline.events.filter((e) => p.showEvents.has(e.type))
-  const nextEvent = important.find((e) => toMs(e.start) > p.cursor)
+  const nextEvent = p.hideFuture ? undefined : important.find((e) => toMs(e.start) > p.cursor)
   const prevEvent = [...important].reverse().find((e) => toMs(e.start) < p.cursor)
 
   return (
@@ -95,6 +96,7 @@ export function TimeBar(p: Props) {
         cursor={p.cursor}
         windowStart={p.cursor - (p.windowH - 1) * HOUR}
         showEvents={p.showEvents}
+        hideFuture={p.hideFuture}
         height={40}
         onPick={(ms) => {
           p.onPlaying(false)

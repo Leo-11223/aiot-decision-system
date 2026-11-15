@@ -24,7 +24,7 @@ export const levelVar = (lvl: number): string =>
   lvl < 0 ? 'var(--lvl-none)' : `var(--lvl-${Math.min(3, lvl)})`
 
 export const modeClass = (mode: string): string =>
-  mode === '自動執行' ? 'mode-auto' : mode === 'Fallback' ? 'mode-fallback' : 'mode-manual'
+  mode === '自動執行' ? 'mode-auto' : mode === 'Fallback' ? 'mode-fallback' : mode === '維持現狀' ? 'mode-noop' : 'mode-manual'
 
 // 每個場域在圖表上要畫的欄位與顯示名稱
 export const SITE_CHART: Record<string, { vars: string[]; labels: Record<string, string>; unit: string; fcVar: string }> = {

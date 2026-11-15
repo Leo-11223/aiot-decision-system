@@ -5,6 +5,7 @@ MODE_TEXT = {
     "人工確認": "需要人工核准後才會執行",
     "自動執行": "低風險且效果已驗證，系統自動執行",
     "Fallback": "感測器讀值不可信，改用備案",
+    "維持現狀": "不需動作",
 }
 
 
@@ -37,6 +38,9 @@ def site_summary(snap, cfg, indicator):
     now_txt = f"{st.get('指數', name)} {_num(st.get('數值'))}，屬於「{st.get('等級', '—')}」"
     sensor_issues = [x for x in snap.get("diagnoses", []) if any(k in x["問題"] for k in
                      ("無反應", "階躍", "極端值", "飽和", "超出", "探棒", "尖峰", "完整率", "讀值無效"))]
+    delay = st.get("資料延遲(h)")
+    if delay is not None and delay >= 3:
+        now_txt = f"已 {delay} 小時沒有新資料（感測器可能斷線），以下為最後讀值：" + now_txt
     if sensor_issues:
         now_txt += f"；另有 {len(sensor_issues)} 項感測器問題（已自動排除不可信的讀值）"
 
@@ -62,7 +66,7 @@ def site_summary(snap, cfg, indicator):
             if "持續法" in fc.get("方法", ""):
                 nxt += "（預測模型目前不夠準，以現值延續估計）"
 
-    decs = [d for d in snap.get("decisions", []) if not any(k in d.get("動作", "") for k in ("維持", "待命", "不啟動"))]
+    decs = [d for d in snap.get("decisions", []) if d.get("執行模式") != "維持現狀"]
     decs.sort(key=lambda d: d.get("優先", 9))
     if decs:
         d = decs[0]

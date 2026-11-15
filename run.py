@@ -47,7 +47,7 @@ def main():
     print("[1/4] 讀取資料、計算感測器可信度…", flush=True)
     sites = load_all()                                             # 01 + 02
     print("[2/4] 驗證動作成效（執行回饋）…", flush=True)
-    verify = F.verify_sheep(sites["sheep"])                        # 05 → 寫入成效資料庫
+    verify = F.verify_sheep(sites["sheep"], write=True)            # 05 → 輸出成效報表
     replay = F.replay_sheep(sites["sheep"], D.sheep_rule)
     motor_eff = F.verify_expert(sites["expert"])
     ctx = {"sites": sites, "verify": verify, "replay": replay, "motor_effect": motor_eff}

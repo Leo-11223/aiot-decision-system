@@ -35,43 +35,67 @@ def _reg(addr, value, label):
     return {"功能碼": "06", "功能": "寫入單一暫存器", "位址": str(addr), "值": str(value), "點位": label}
 
 
-def _plan(kind, note, writes=None, site_id=None):
+def _plan(kind, note, writes=None, site_id=None, undo=None):
     p = {"類型": kind, "說明": note}
     if writes:
         g = GATEWAYS[site_id]
         p.update({"協定": "Modbus TCP（模擬）", "控制器": g["name"], "站號": g["unit"], "點位來源": g["source"],
                   "寫入": writes})
+        if undo:
+            p["還原"] = undo
     return p
 
 
+def undo_plan(p):
+    """把一個控制計畫轉成它的還原計畫（撤回核准時用）。"""
+    if not p.get("還原"):
+        return None
+    q = {k: v for k, v in p.items() if k not in ("寫入", "還原")}
+    q["說明"] = f"撤回：{p['說明']}"
+    q["寫入"] = p["還原"]
+    return q
+
+
 def plan(site_id: str, d: dict) -> dict:
-    """決策 → 控制計畫。類型：設備指令／系統設定／系統通知／人工作業／維持現狀。"""
+    """決策 → 控制計畫。類型：設備指令／系統設定／系統通知／人工作業／維持現狀。
+    設備指令同時附上「還原」寫入（撤回核准或目標達成時送出），確保有開就有關。"""
     dev, act = d.get("設備", ""), d.get("動作", "")
-    if site_id == "sheep" and dev.startswith("風扇") and "開啟" in act:
+    if d.get("執行模式") == "維持現狀":
+        return _plan("維持現狀", "維持目前狀態，不需下發")
+    if site_id == "sheep" and dev.startswith("風扇"):
+        if "關閉" in act:
+            return _plan("設備指令", "關閉全部風扇", [_coil(a, False, name) for name, a in FANS], site_id,
+                         undo=None)
         m = re.match(r"(\d+)\s*/", d.get("幅度", ""))
         n = int(m.group(1)) if m else len(FANS)
         writes = [_coil(a, i < n, name) for i, (name, a) in enumerate(FANS)]
-        return _plan("設備指令", f"開啟 {n} 台風扇（其餘關閉）", writes, site_id)
+        return _plan("設備指令", f"開啟 {n} 台風扇（其餘關閉）", writes, site_id,
+                     undo=[_coil(a, False, name) for name, a in FANS])
     if site_id == "sheep" and dev.startswith("南遮陽"):
         name, open_, close = SHADE
         on = "張" in act
         return _plan("設備指令", f"{name}{'張開' if on else '收起'}（脈衝輸出）",
-                     [_coil(open_ if on else close, True, f"{name}{'張' if on else '收'}")], site_id)
+                     [_coil(open_ if on else close, True, f"{name}{'張' if on else '收'}")], site_id,
+                     undo=[_coil(close if on else open_, True, f"{name}{'收' if on else '張'}")])
     if site_id == "sheep" and "帆布" in dev:
-        if "維持" in act:
-            return _plan("維持現狀", "帆布維持目前位置，不需下發")
         on = "張" in act
         writes = [_coil(o if on else c, True, f"{name}{'張' if on else '收'}") for name, o, c in CANVAS]
-        return _plan("設備指令", f"全部帆布{'張開' if on else '收起'}（脈衝輸出）", writes, site_id)
-    if site_id == "expert" and dev.startswith("CPM 馬達（打氣"):
-        return _plan("設備指令", "馬達持續運轉並停用日間停機排程",
-                     [_coil(1, True, "馬達運轉"), _reg(40010, 0, "日間停機排程（0=停用）")], site_id)
+        undo = [_coil(c if on else o, True, f"{name}{'收' if on else '張'}") for name, o, c in CANVAS]
+        return _plan("設備指令", f"全部帆布{'張開' if on else '收起'}（脈衝輸出）", writes, site_id, undo=undo)
+    if site_id == "expert" and dev.startswith("CPM 馬達"):
+        if "恢復" in act:
+            return _plan("設備指令", "恢復日間停機排程", [_reg(40010, 1, "日間停機排程（1=啟用）")], site_id,
+                         undo=[_reg(40010, 0, "日間停機排程（0=停用）")])
+        if "運轉" in act and "巡檢" not in act:
+            return _plan("設備指令", "馬達持續運轉並停用日間停機排程",
+                         [_coil(1, True, "馬達運轉"), _reg(40010, 0, "日間停機排程（0=停用）")], site_id,
+                         undo=[_reg(40010, 1, "日間停機排程（1=啟用）")])
     if site_id == "site" and dev.startswith("灑水"):
-        if "啟動" in act and "待命" not in act:
-            return _plan("設備指令", "開啟周界灑水閥", [_coil(1, True, "周界灑水閥")], site_id)
-        return _plan("維持現狀", "灑水維持待命，不需下發")
-    if "維持" in act:
-        return _plan("維持現狀", "維持目前狀態，不需下發")
+        if "停止" in act:
+            return _plan("設備指令", "關閉周界灑水閥", [_coil(1, False, "周界灑水閥")], site_id, undo=None)
+        if "啟動" in act:
+            return _plan("設備指令", "開啟周界灑水閥", [_coil(1, True, "周界灑水閥")], site_id,
+                         undo=[_coil(1, False, "周界灑水閥")])
     if dev in ("告警規則", "本站空品判斷") or "排除" in act or "暫停" in act or "停用平均值" in act:
         return _plan("系統設定", "變更決策引擎的判斷設定，不送往現場設備")
     if dev.endswith("告警") and "發布" in act:

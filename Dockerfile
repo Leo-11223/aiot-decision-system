@@ -32,5 +32,9 @@ COPY --from=web /web/dist frontend/dist
 # 打包時就把模型訓練好存檔，雲端主機啟動時只需讀檔
 RUN python -m backend.warm
 
+# 以一般使用者執行（不用 root）；outputs 需可寫入（資料庫、成效報表）
+RUN useradd --create-home app && chown -R app:app /app
+USER app
+
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}"]

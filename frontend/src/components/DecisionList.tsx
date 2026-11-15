@@ -7,10 +7,11 @@ import { modeClass } from '../util'
 
 type Props = {
   decisions: Decision[]
+  replay?: boolean
   onReview: (d: Decision, action: 'approve' | 'reject', note?: string) => Promise<void>
 }
 
-export function DecisionList({ decisions, onReview }: Props) {
+export function DecisionList({ decisions, onReview, replay = false }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [rejecting, setRejecting] = useState<string | null>(null)
@@ -46,6 +47,7 @@ export function DecisionList({ decisions, onReview }: Props) {
             </h4>
           </header>
           {d.一句話 && <p className="plain">{d.一句話}</p>}
+          {d.人員回饋 && <p className="feedback-flag">人員回饋：{d.人員回饋}</p>}
           <dl>
             <div>
               <dt>理由</dt>
@@ -98,17 +100,37 @@ export function DecisionList({ decisions, onReview }: Props) {
             )}
           </dl>
           <footer>
+            {d.執行模式 === '維持現狀' && <span className="note">不需動作，持續監測</span>}
             {d.執行模式 === '自動執行' && (
               <span className="note">
-                {d.控制指令?.類型 === '設備指令' ? '低風險且已驗證，系統自動下發（見「執行」面板）' : '低風險且已驗證，系統自動處理'}
+                {d.控制指令?.類型 === '設備指令'
+                  ? replay
+                    ? '低風險且已驗證；回放過去時間點只顯示，不實際下發'
+                    : '低風險且已驗證，系統自動下發（見「執行」面板）'
+                  : '低風險且已驗證，系統自動處理'}
               </span>
             )}
-            {d.執行模式 !== '自動執行' && d.審核 && (
+            {d.執行模式 === '自動執行' && (
+              <div className="review">
+                {d.審核?.action === 'reject' && (
+                  <span className="note bad">已駁回（{d.審核.operator ?? '—'}）</span>
+                )}
+                <button
+                  disabled={busy !== null}
+                  onClick={() => setRejecting(rejecting === d.id ? null : d.id)}
+                  aria-expanded={rejecting === d.id}
+                  title="現場不同意這項自動執行：駁回會撤回指令；同一規則常被駁回會自動改回人工確認"
+                >
+                  駁回自動執行
+                </button>
+              </div>
+            )}
+            {(d.執行模式 === '人工確認' || d.執行模式 === 'Fallback') && d.審核 && (
               <span className={'note ' + (d.審核.action === 'approve' ? 'ok' : 'bad')}>
                 {d.審核.action === 'approve' ? '已核准' : '已駁回'}（{d.審核.operator ?? '—'}，{d.審核.at.replace('T', ' ').slice(5, 16)}）
               </span>
             )}
-            {d.執行模式 !== '自動執行' && (
+            {(d.執行模式 === '人工確認' || d.執行模式 === 'Fallback') && (
               <div className="review">
                 <button className="primary" disabled={busy !== null} onClick={() => act(d, 'approve')}>
                   {busy === d.id + 'approve' ? '送出中' : d.審核 ? '重新核准' : '核准'}

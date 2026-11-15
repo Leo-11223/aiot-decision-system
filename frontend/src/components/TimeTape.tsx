@@ -23,9 +23,10 @@ type Props = {
   height?: number
   compact?: boolean
   onPick?: (ms: number) => void
+  hideFuture?: boolean   // 即時模式：遮住當下時間之後（未來）的等級與事件
 }
 
-export function TimeTape({ timeline, cursor, windowStart, showEvents, height = 34, compact = false, onPick }: Props) {
+export function TimeTape({ timeline, cursor, windowStart, showEvents, height = 34, compact = false, onPick, hideFuture = false }: Props) {
   const [ref, width] = useWidth<HTMLDivElement>()
   const start = toMs(timeline.start)
   const end = toMs(timeline.end)
@@ -46,7 +47,13 @@ export function TimeTape({ timeline, cursor, windowStart, showEvents, height = 3
     return out
   }, [timeline])
 
-  const events = compact ? [] : timeline.events.filter((e) => !showEvents || showEvents.has(e.type))
+  const events = compact
+    ? []
+    : timeline.events
+        .filter((e) => !showEvents || showEvents.has(e.type))
+        .filter((e) => !hideFuture || cursor === undefined || toMs(e.start) <= cursor)
+        // 進行中的事件只畫到當下
+        .map((e) => (hideFuture && cursor !== undefined && toMs(e.end) > cursor ? { ...e, end: new Date(cursor).toISOString() } : e))
 
   const pick = (clientX: number) => {
     const el = ref.current
@@ -80,6 +87,18 @@ export function TimeTape({ timeline, cursor, windowStart, showEvents, height = 3
             opacity={r.lvl < 0 ? 0.5 : 0.85}
           />
         ))}
+        {cursor !== undefined && x(cursor + HOUR) < width && (
+          <rect
+            x={x(cursor + HOUR)}
+            y={barY}
+            width={width - x(cursor + HOUR)}
+            height={barH}
+            fill="var(--bg)"
+            opacity={hideFuture ? 1 : 0.45}
+          >
+            <title>{hideFuture ? '未來（即時模式下隱藏）' : '當下時間之後（回放時可預覽）'}</title>
+          </rect>
+        )}
         {windowStart !== undefined && cursor !== undefined && (
           <rect
             x={x(Math.max(start, windowStart))}

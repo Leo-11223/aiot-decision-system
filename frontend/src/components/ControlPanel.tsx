@@ -10,6 +10,7 @@ const STATUS_CLASS: Record<Command['status'], string> = {
   設備已執行: 'done',
   下發失敗: 'failed',
   人工已完成: 'manual',
+  已撤回: 'revoked',
 }
 
 const fmtTs = (ts: string | null) => (ts ? ts.replace('T', ' ').slice(5, 16) : '—')
@@ -110,7 +111,12 @@ export function ControlPanel({ siteId, refreshKey, hasController }: Props) {
           </li>
         ))}
       </ul>
-      {hasController && cmds[0]?.plan.點位來源 && <p className="hint">點位：{cmds[0].plan.點位來源}。此為模擬控制器，正式導入時改接現場 SCADA／PLC。</p>}
+      {hasController && (
+        <p className="hint">
+          此為模擬控制器，正式導入時改接現場 SCADA／PLC。回放過去的時間點時，控制器回報只示範流程，不會改變歷史資料；成效一律以歷史現場紀錄為準，所以「執行回饋」可能顯示當時現場其實沒有執行。
+          {cmds[0]?.plan.點位來源 ? `點位：${cmds[0].plan.點位來源}。` : ''}
+        </p>
+      )}
     </div>
   )
 }

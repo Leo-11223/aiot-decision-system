@@ -34,6 +34,7 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
   const [cmdKey, setCmdKey] = useState(0)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [autoPause, setAutoPause] = useState(true)
+  const [hideFuture, setHideFuture] = useState(false)
   const prevSnap = useRef<Snapshot | null>(null)
   const toastId = useRef(0)
   const reqId = useRef(0)
@@ -152,7 +153,8 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
   }, [playing, speed, step, end, timeline])
 
   const onReview = async (d: Decision, action: 'approve' | 'reject', note?: string) => {
-    await api.review(d.id, action, note)
+    const r = await api.review(d.id, action, note)
+    if (r.訊息) setToasts((t) => [...t, { id: ++toastId.current, kind: 'info' as const, title: `${d.設備}`, body: r.訊息 as string }].slice(-6))
     setCmdKey((k) => k + 1)
     if (cursor !== null) await load(cursor)
   }
@@ -212,6 +214,7 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
         onSpeed={setSpeed}
         playing={playing}
         onPlaying={setPlaying}
+        hideFuture={hideFuture || playing}
         showEvents={showEvents}
         onToggleEvent={(t) =>
           setShowEvents((s) => {
@@ -227,10 +230,16 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
         <span>
           <b>即時模式</b>：按「播放」讓時間一小時一小時往前走，就像資料即時進來；有新狀況會在右上角通知。
         </span>
-        <label>
-          <input type="checkbox" checked={autoPause} onChange={(e) => setAutoPause(e.target.checked)} />
-          有新決策待核准時自動暫停
-        </label>
+<span className="live-opts">
+          <label>
+            <input type="checkbox" checked={autoPause} onChange={(e) => setAutoPause(e.target.checked)} />
+            有新決策待核准時自動暫停
+          </label>
+          <label>
+            <input type="checkbox" checked={hideFuture} onChange={(e) => setHideFuture(e.target.checked)} />
+            隱藏未來（播放時一律隱藏）
+          </label>
+        </span>
       </div>
       <Toasts items={toasts} onClose={closeToast} />
 
@@ -264,6 +273,11 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
               <span className="status-level" style={{ background: st ? levelVar(st.等級碼) : undefined }}>
                 {st?.等級 ?? '—'}
               </span>
+              {st && (st['資料延遲(h)'] ?? 0) >= 1 && (
+                <span className="stale">
+                  最後有效讀值 {(st.資料時間 ?? '').replace('T', ' ').slice(5, 16)}（{st['資料延遲(h)']} 小時前，可能斷線）
+                </span>
+              )}
             </div>
             <div className="readings">
               {st &&
@@ -331,7 +345,7 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
         <aside className="col-side">
           <section className="panel">
             <h2>現在該做什麼</h2>
-            {snap ? <DecisionList decisions={snap.decisions} onReview={onReview} /> : <p className="empty">載入中</p>}
+            {snap ? <DecisionList decisions={snap.decisions} onReview={onReview} replay={!!snap.回放模式} /> : <p className="empty">載入中</p>}
           </section>
 
           <section className="panel">

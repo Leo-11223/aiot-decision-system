@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from aiot.config import SITES
 from . import auth
 from . import control
+from . import loop
 from .control import SIM
 from .engine import Engine
 from .store import Store, WO_STATUS
@@ -52,7 +53,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# API 文件頁（/docs）：本機開發預設開啟；雲端（Render 會設 RENDER 環境變數）預設關閉，避免未登入就能看到所有 API。
+# 需要時設定 ENABLE_DOCS=1 開啟。
+DOCS = os.environ.get("ENABLE_DOCS", "0" if os.environ.get("RENDER") else "1") == "1"
+
 app = FastAPI(
+    docs_url="/docs" if DOCS else None, redoc_url=None, openapi_url="/openapi.json" if DOCS else None,
     title="AIoT 決策閉環 API",
     description="IoT 感測 → 大數據 → AI 分析 → 決策引擎 → 執行回饋。"
                 "所有查詢都可用 `at` 指定「當下時間」，只會使用該時間點以前的資料。",
@@ -74,9 +80,28 @@ def _ready():
                             else f"系統啟動失敗：{state['error']}")
 
 
+class _Guard:
+    """包住 Engine：參數錯誤（例如時間格式 at=abc）回 422，而不是 500。"""
+
+    def __init__(self, e):
+        self._e = e
+
+    def __getattr__(self, name):
+        attr = getattr(self._e, name)
+        if not callable(attr):
+            return attr
+
+        def call(*a, **k):
+            try:
+                return attr(*a, **k)
+            except ValueError as err:
+                raise HTTPException(422, str(err))
+        return call
+
+
 def eng() -> Engine:
     _ready()
-    return state["engine"]
+    return _Guard(state["engine"])
 
 
 def db() -> Store:
@@ -113,6 +138,17 @@ def check_site(site_id):
 
 
 def with_review_status(snap):
+    # 人員回饋接回決策：常被駁回的規則（審核 ≥3 次、駁回率 ≥50%）自動降回人工確認並註明原因
+    flags = loop.review_flags(db().reviews(snap["site_id"], 10000), snap["site_id"], str(snap["at"])[:16])
+    for d in snap["decisions"]:
+        f = flags.get(d["設備"])
+        if f and d["執行模式"] in ("自動執行", "人工確認"):
+            n = f["核准"] + f["駁回"]
+            d["人員回饋"] = (f"近期 {n} 次審核中駁回 {f['駁回']} 次"
+                         + (f"（原因：{'；'.join(f['原因'][-2:])}）" if f["原因"] else "") + "，規則已標示檢討")
+            if d["執行模式"] == "自動執行":
+                d["執行模式"], d["人工確認"] = "人工確認", True
+                d["人員回饋"] += "；暫停自動執行，改為人工確認"
     for d in snap["decisions"]:
         rv = db().latest_review(d["id"])
         d["審核"] = None if rv is None else {"action": rv["action"], "operator": rv["operator"], "at": rv["created_at"]}
@@ -127,7 +163,9 @@ if not DIST.is_dir():
     # 沒有打包好的前端（本機開發時）：首頁導向 API 文件
     @app.get("/", include_in_schema=False)
     def root():
-        return RedirectResponse("/docs")
+        if DOCS:
+            return RedirectResponse("/docs")
+        return {"message": "AIoT 決策閉環 API；前端請另外啟動（frontend 目錄執行 npm run dev）"}
 
 
 @app.get("/api/health", tags=["系統"], summary="系統狀態：ok／loading（啟動中）／error")
@@ -153,6 +191,7 @@ def list_sites(at: Optional[str] = Query(None, description=AT_DOC + "（超出�
 def site_snapshot(site_id: str, at: Optional[str] = Query(None, description=AT_DOC), user: dict = Depends(current_user)):
     check_site(site_id)
     snap = with_review_status(copy.deepcopy(eng().snapshot(site_id, at)))
+    snap["回放模式"] = str(snap["at"]) < str(snap["range"]["end"])   # 不是最新時間 → 回放
     auto_dispatch(snap)
     return snap
 
@@ -161,12 +200,17 @@ SYSTEM_USER = {"username": "system", "display_name": "系統（自動執行）",
 
 
 def auto_dispatch(snap):
-    """「自動執行」且需要動設備的決策：系統直接下發。設備狀態沒變（與上一筆指令相同）就不重複下發。"""
+    """「自動執行」且需要動設備的決策：系統直接下發。設備狀態沒變（與上一筆指令相同）就不重複下發。
+    只在「當下」是資料最新時間時才下發；回放過去的時間點只顯示，不會送出指令。"""
     at = str(snap.get("at", ""))[:16]
+    if snap.get("回放模式"):
+        return
     for d in snap["decisions"]:
         p = d["控制指令"]
         if d["執行模式"] != "自動執行" or p["類型"] != "設備指令":
             continue
+        if d.get("審核") and d["審核"]["action"] == "reject":
+            continue   # 人員已駁回這項自動執行，不再下發
         last = db().last_device_command(d["site_id"], d["設備"])
         if last and last["plan"].get("寫入") == p.get("寫入") and last["status"] != "下發失敗":
             continue
@@ -234,13 +278,31 @@ def review_decision(decision_id: str, body: Review, user: dict = Depends(current
     db().log(user, body.action, rec["site_id"], f"{d['設備']}：{d['動作']}",
              {"依據資料時間": at, "執行模式": d["執行模式"], "風險": d["風險"], "備註": note, "review_id": rid})
     # 05 執行：核准且需要動設備 → 產生控制指令送往（模擬）控制器
-    cmd = None
+    cmd, msg = None, None
     p = control.plan(rec["site_id"], d)
+    last = db().last_decision_command(decision_id)
+    active = last is not None and last["status"] in ACTIVE_STATUS
     if body.action == "approve" and p["類型"] == "設備指令":
-        cmd = SIM.send(db(), rec["site_id"], decision_id, at, d, p, user["display_name"])
-        db().log(user, "command", rec["site_id"], f"{d['設備']}：{d['動作']}", _cmd_detail(cmd, at))
+        if d["執行模式"] == "Fallback":
+            msg = "感測器讀值不可信：不下發自動控制指令，請依 Fallback 方案由人員處理"
+        elif active:
+            cmd, msg = last, "這項決策已下發過，不重複下發"     # 冪等：重複核准不重複送指令
+        else:
+            cmd = SIM.send(db(), rec["site_id"], decision_id, at, d, p, user["display_name"])
+            db().log(user, "command", rec["site_id"], f"{d['設備']}：{d['動作']}", _cmd_detail(cmd, at))
+    elif body.action == "reject" and active:
+        # 核准後又駁回 → 撤回：送出還原指令，原指令標為「已撤回」
+        undo = control.undo_plan(last["plan"])
+        db().update_command(last["id"], "已撤回", user["display_name"], f"{user['display_name']} 駁回，已撤回")
+        if undo:
+            cmd = SIM.send(db(), rec["site_id"], decision_id, at, d, undo, user["display_name"])
+            db().log(user, "command", rec["site_id"], f"{d['設備']}：撤回", _cmd_detail(cmd, at))
+        msg = "已撤回先前下發的指令" + ("並送出還原指令" if undo else "")
     return {"review_id": rid, "decision_id": decision_id, "action": body.action, "site_id": rec["site_id"], "at": at,
-            "控制計畫": p, "command": cmd}
+            "控制計畫": p, "command": cmd, "訊息": msg}
+
+
+ACTIVE_STATUS = ("已下發", "設備已執行", "人工已完成")
 
 
 # ================================================================ 05 執行（模擬控制器）
@@ -322,11 +384,14 @@ def update_work_order(wo_id: str, body: WOUpdate, user: dict = Depends(current_u
 
 # ================================================================ 執行回饋
 @app.get("/api/feedback", tags=["執行回饋"], summary="動作成效驗證結果")
-def feedback(user: dict = Depends(current_user)):
+def feedback(at: Optional[str] = Query(None, description=AT_DOC + "；不填 = 最新"),
+             user: dict = Depends(current_user)):
     from .engine import jsonable
     e = eng()
-    return jsonable({"sheep_effects": e.verify["effects"], "motor_effect": e.motor_effect,
-                     "controller_abnormal_hours": e.verify["abnormal_hours"]})
+    eff = loop.effects_at(e, at)
+    return jsonable({"sheep_effects": [v for k, v in eff.items() if k != "馬達運轉"], "motor_effect": eff["馬達運轉"],
+                     "controller_abnormal_hours": [h for h in e.verify["abnormal_hours"]
+                                                   if pd.Timestamp(h) <= e.resolve_time("sheep", at)]})
 
 
 @app.get("/api/feedback/outcomes", tags=["執行回饋"], summary="每筆核准的成效追蹤（依當下時間評估是否達成目標）")
@@ -348,10 +413,10 @@ def feedback_outcomes(site_id: Optional[str] = None,
 
 
 @app.get("/api/feedback/rules", tags=["執行回饋"], summary="規則學習：每條規則的核准／駁回統計與成效驗證進度")
-def feedback_rules(user: dict = Depends(current_user)):
+def feedback_rules(at: Optional[str] = Query(None, description=AT_DOC + "；不填 = 最新"),
+                   user: dict = Depends(current_user)):
     from .engine import jsonable
-    from .loop import rule_stats
-    return jsonable(rule_stats(eng(), db().reviews(None, 10000)))
+    return jsonable(loop.rule_stats(eng(), db().reviews(None, 10000), at))
 
 
 # ================================================================ 登入與帳號
@@ -361,8 +426,13 @@ class LoginBody(BaseModel):
 
 
 @app.post("/api/auth/login", tags=["帳號"], summary="登入，取得 token（之後請求放在 Authorization: Bearer 標頭）")
-def login(body: LoginBody):
-    return _auth_call(auth.login, db(), body.username.strip(), body.password)
+def login(body: LoginBody, request: Request = None):
+    ip = None
+    if request is not None:
+        # 雲端主機在反向代理後面：取 X-Forwarded-For 的第一個位址
+        fwd = request.headers.get("x-forwarded-for", "")
+        ip = fwd.split(",")[0].strip() or (request.client.host if request.client else None)
+    return _auth_call(auth.login, db(), body.username.strip()[:32], body.password, ip)
 
 
 @app.get("/api/auth/me", tags=["帳號"], summary="目前登入者")

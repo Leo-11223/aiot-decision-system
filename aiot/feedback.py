@@ -1,5 +1,8 @@
-"""05 執行回饋：從羊舍的實際設備動作紀錄，驗證「動作 → 環境變化」的成效，
-並把結果寫回成效資料庫（effect_db），供決策引擎下一輪使用（持續學習）。"""
+"""05 執行回饋：從現場實際的設備動作紀錄，驗證「動作 → 環境變化」的成效。
+
+決策引擎每個時間點都用「當下以前」的紀錄重新計算成效（sheep_effects、verify_expert），
+樣本達驗證標準後動作才升級為自動執行；新資料進來會自動納入（持續學習）。
+effect_db.json 只是批次執行（run.py）時輸出的成效報表，網頁版不讀它。"""
 import json
 
 from .config import MIN_SAMPLES, Z_ONE_SIDED
@@ -59,11 +62,13 @@ def sheep_effects(site: dict):
     return effects, st, fans_on, shade_on, canvas_on
 
 
-def verify_sheep(site: dict) -> dict:
+def verify_sheep(site: dict, write: bool = False) -> dict:
+    """write=True 時輸出成效報表 effect_db.json（批次執行 run.py 用；網頁版不寫檔）。"""
     effects, st, fans_on, shade_on, canvas_on = sheep_effects(site)
-    db = {e["action"]: e for e in effects}
-    EFFECT_DB.parent.mkdir(exist_ok=True)
-    EFFECT_DB.write_text(json.dumps(db, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
+    if write:
+        db = {e["action"]: e for e in effects}
+        EFFECT_DB.parent.mkdir(exist_ok=True)
+        EFFECT_DB.write_text(json.dumps(db, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
     return {"effects": effects, "abnormal_hours": [str(t) for t in st["abnormal_hours"]],
             "fan_on_hours": int(fans_on.sum()), "shade_on_hours": int(shade_on.sum()),
             "canvas_on_hours": int(canvas_on.sum())}
@@ -88,26 +93,40 @@ def replay_sheep(site: dict, rule) -> dict:
             "daily": daily, "series": out}
 
 
-def verify_expert(site: dict) -> dict:
-    """馬達停機對 DO 的影響：停機小時的 ΔDO 與同時段運轉小時比較。
-    effect < 0 且顯著 → 證實「運轉打氣能維持 DO」，此動作列為已驗證。"""
-    df = site["df"]
+def verify_expert(site: dict, days_window=3) -> dict:
+    """馬達停機對 DO 的影響（只用傳入的資料，即當下以前）。
+
+    做法（比照風扇的驗證標準）：
+      - DO 用三支可信探棒的中位數（共識值），不用單一探棒。
+      - 每個停機小時，與「前後 3 天內同一時段、馬達運轉」的共識 DO 中位數比較，排除季節與日夜差異。
+      - 以「日」為單位平均後再算標準誤（同一天的小時彼此相關，不能當獨立樣本）。
+      - 已驗證 = 停機 ≥ MIN_SAMPLES 小時、至少 5 天，且單尾 95% 顯著（效果 + 1.645×標準誤 < 0）。"""
+    df, c = site["df"], site["clean"]
+    do_cols = [k for k in ("do1", "do2", "do3") if k in c]
+    cons = c[do_cols].median(axis=1)
     online = df["power"].fillna(0) > 5
-    stop = (df["current"] < 0.5) & online
-    run = (df["current"] >= 0.5) & online
-    d = df["do1"].shift(-1) - df["do1"].shift(1)
+    stop = (df["current"] < 0.5) & online & cons.notna()
+    run = (df["current"] >= 0.5) & online & cons.notna()
     hours = df.index.hour
-    base = d[run].groupby(hours[run]).mean()
-    on = d[stop].dropna()
-    diff = (on - base.reindex(on.index.hour).values).dropna()
-    eff = float(diff.mean()) if len(diff) else None
-    se = float(diff.std(ddof=1) / np.sqrt(len(diff))) if len(diff) > 1 else None
-    # 同時段配對的 DO 水準比較（排除日夜差異）
-    lvl_stop = df.loc[stop, "do1"]
-    lvl_run_same = df.loc[run, "do1"].groupby(hours[run]).median().reindex(lvl_stop.index.hour).values
-    level_gap = float(np.nanmedian(lvl_stop.values - lvl_run_same)) if len(lvl_stop) else None
+    diffs = {}
+    run_idx = df.index[run]
+    for ts in df.index[stop]:
+        win = run_idx[(run_idx >= ts - pd.Timedelta(days=days_window)) & (run_idx <= ts + pd.Timedelta(days=days_window))
+                      & (run_idx.hour == ts.hour)]
+        if len(win) >= 2:
+            diffs[ts] = float(cons[ts] - cons[win].median())
+    d = pd.Series(diffs, dtype=float)
+    daily = d.groupby(d.index.date).mean() if len(d) else pd.Series(dtype=float)
+    n_days = int(len(daily))
+    eff = float(daily.mean()) if n_days else None
+    se = float(daily.std(ddof=1) / np.sqrt(n_days)) if n_days > 1 else None
+    verified = bool(len(d) >= MIN_SAMPLES and n_days >= 5 and eff is not None and se is not None
+                    and eff + Z_ONE_SIDED * se < 0)
     days = (df.index[-1] - df.index[0]).days or 1
-    return {"n": int(len(diff)), "effect": eff, "se": se, "level_gap_same_hour": level_gap,
-            "verified": bool(level_gap is not None and level_gap < -0.1 and len(lvl_stop) >= MIN_SAMPLES),
-            "do_stop": float(df.loc[stop, "do1"].median()), "do_run": float(df.loc[run, "do1"].median()),
+    return {"n": int(len(d)), "n_days": n_days, "effect": eff, "se": se,
+            "level_gap_same_hour": eff,      # 舊欄位名稱相容：停機時 DO 比相鄰日同時段運轉低多少
+            "verified": verified,
+            "method": f"共識 DO，與前後 {days_window} 天同時段運轉比較，以日為單位檢定",
+            "do_stop": float(cons[stop].median()) if stop.any() else None,
+            "do_run": float(cons[run].median()) if run.any() else None,
             "stop_hours_per_day": float(stop.sum() / days)}

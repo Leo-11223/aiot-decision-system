@@ -37,13 +37,14 @@ export type Decision = {
   風險: string
   感測可信度: number | null
   成效已驗證: boolean
-  執行模式: '自動執行' | '人工確認' | 'Fallback'
+  執行模式: '自動執行' | '人工確認' | 'Fallback' | '維持現狀'
   人工確認: boolean
   Fallback: string
   成本: string
   優先: number
   審核: Review | null
   一句話?: string
+  人員回饋?: string
   控制指令: ControlPlan
 }
 
@@ -68,7 +69,7 @@ export type Command = {
   device: string
   action: string
   plan: ControlPlan
-  status: '已下發' | '設備已執行' | '下發失敗' | '人工已完成'
+  status: '已下發' | '設備已執行' | '下發失敗' | '人工已完成' | '已撤回'
   operator: string | null
   auto: boolean
   note: string | null
@@ -143,12 +144,15 @@ export type Snapshot = {
     時間: string
     感測可信度: number
     讀值: Record<string, number | null>
+    資料時間?: string | null
+    '資料延遲(h)'?: number | null
   }
   diagnoses: Diagnosis[]
   decisions: Decision[]
   work_orders: WorkOrder[]
   forecast: (Forecast | null)[]
   trust_now: Record<string, number>
+  回放模式?: boolean
   白話?: { 現在: string; 接下來: string; 該做什麼: string }
 }
 
@@ -252,7 +256,7 @@ export const api = {
   series: (id: string, vars: string[], hours: number, step: number, at?: string) =>
     request<Series>(`/api/sites/${id}/series` + q({ vars: vars.join(','), hours, step, at })),
   review: (decisionId: string, action: 'approve' | 'reject', note?: string) =>
-    request<{ review_id: number }>(`/api/decisions/${decisionId}/review`, {
+    request<{ review_id: number; 訊息?: string | null; command?: Command | null }>(`/api/decisions/${decisionId}/review`, {
       method: 'POST',
       body: JSON.stringify({ action, note }),
     }),

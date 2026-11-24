@@ -147,6 +147,53 @@ def review_flags(reviews: list, site_id: str, until: str):
             if v["核准"] + v["駁回"] >= REVIEW_FLAG_MIN and v["駁回"] / (v["核准"] + v["駁回"]) >= 0.5}
 
 
+# ---- 同一建議不必每小時重新核准（建議 → 行動不能靠人一直按）
+CARRY_MAX_H = 24        # 一次核准最多沿用 24 小時，之後每天重新確認一次
+CARRY_DEFAULT_H = 6     # 決策沒有標「事件開始」時，核准沿用 6 小時
+REJECT_COOLDOWN_H = 6   # 駁回後 6 小時內不再推送同一建議，除非情況更緊急
+
+
+def covers(approved, new):
+    """核准過的幅度是否涵蓋新的幅度：一樣，或同為「n/總數 台」且核准的台數不少於新的（4 台核准過 → 2 台不必再問；2 → 4 要再問）。"""
+    if approved == new:
+        return True
+    m = lambda x: re.match(r"\s*(\d+)\s*/\s*(\d+)", x or "")
+    a, b = m(approved), m(new)
+    return bool(a and b and a.group(2) == b.group(2) and int(a.group(1)) >= int(b.group(1)))
+
+
+def carry_over(reviews: list, d: dict, site_id: str, at: str):
+    """這項「人工確認」決策能不能沿用先前的審核，免得同一建議每小時都要重按一次。
+    · 先前核准過同設備、同動作、幅度涵蓋現在（核准 4 台 → 之後建議 2 台不再問），且仍在同一段事件內（核准時間 ≥ 事件開始）、未超過 24 小時 → 延續核准
+    · 先前駁回過，6 小時內、且現在沒有比當時更緊急 → 駁回冷卻，不再推送
+    只看 at 以前的審核；同一決策多次審核以最後一次為準。"""
+    t = pd.Timestamp(at)
+    latest = {}
+    for r in sorted(reviews, key=lambda r: r["id"]):
+        rd = r["decision"]
+        if r["site_id"] != site_id or rd.get("設備") != d["設備"] or rd.get("動作") != d["動作"]:
+            continue
+        if pd.Timestamp(r["at"]) >= t:
+            continue
+        latest[r["decision_id"]] = r
+    if not latest:
+        return None
+    r = max(latest.values(), key=lambda r: (r["at"], r["id"]))
+    rt = pd.Timestamp(r["at"])
+    age = (t - rt) / pd.Timedelta(hours=1)
+    fmt = lambda x: x.strftime("%Y-%m-%dT%H:%M")
+    if r["action"] == "approve":
+        start = pd.Timestamp(d["事件開始"]) if d.get("事件開始") else t - pd.Timedelta(hours=CARRY_DEFAULT_H)
+        if rt >= start and age <= CARRY_MAX_H and covers(r["decision"].get("幅度"), d.get("幅度")):
+            return {"類型": "延續核准", "依據時間": fmt(rt), "操作人": r["operator"],
+                    "到期": fmt(rt + pd.Timedelta(hours=CARRY_MAX_H))}
+        return None
+    if age <= REJECT_COOLDOWN_H and d.get("優先", 2) >= r["decision"].get("優先", 2):
+        return {"類型": "駁回冷卻", "依據時間": fmt(rt), "操作人": r["operator"], "原因": r.get("note"),
+                "到期": fmt(rt + pd.Timedelta(hours=REJECT_COOLDOWN_H))}
+    return None
+
+
 def rule_stats(engine, reviews: list, at=None):
     """每條規則（場域＋設備）的審核統計，以及對應動作的成效驗證進度（只用 at 以前的資料）。"""
     effects = effects_at(engine, at)

@@ -43,6 +43,8 @@ export type Decision = {
   成本: string
   優先: number
   審核: Review | null
+  延續?: { 類型: '延續核准' | '駁回冷卻'; 依據時間: string; 操作人: string | null; 到期: string; 原因?: string | null }
+  事件開始?: string
   一句話?: string
   人員回饋?: string
   控制指令: ControlPlan

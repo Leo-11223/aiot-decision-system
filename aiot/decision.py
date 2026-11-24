@@ -40,6 +40,18 @@ def decision(site, device, action, when, magnitude, reason, effect, risk, trust,
             "成本": cost, "優先": priority}
 
 
+def episode_start(thi, low=73.5, hold=2):
+    """這段高溫從什麼時候開始：往回找最近一次「THI 連續 hold 小時低於 low」（風扇解除條件）之後的第一個小時。
+    只用到當下以前的資料。整段都沒解除過 → 資料起點。"""
+    s = thi.dropna()
+    if s.empty:
+        return None
+    ok = (s < low).astype(int).rolling(hold).sum() >= hold
+    hit = ok[ok].index
+    start = s.index[0] if not len(hit) else hit[-1] + pd.Timedelta(hours=1)
+    return start.strftime("%Y-%m-%dT%H:%M")
+
+
 def work_order(site, title, kind, detail, severity, parts="—", due="7 天內"):
     # 管理優先分數：嚴重度 × 類別權重（安全 > 生產 > 數據品質 > 能耗）
     w = {"安全": 4, "生產": 3, "數據品質": 2, "能耗": 1}[kind]
@@ -258,7 +270,15 @@ def build_sheep(site, ctx):
     plan = fan_plan(max(thi, peak6), fan_eff)
     fans = plan["n"]
     decs = []
-    if fans:
+    # 現場風扇目前開了幾台（最後一筆設備紀錄）：已經夠了就不再要求人重新下令
+    on_now = int((site["raw"][F.FANS].iloc[-1] == 1).sum()) if set(F.FANS) <= set(site["raw"].columns) else 0
+    if fans and on_now >= fans:
+        decs.append(decision(
+            name, "風扇-03／04／07／08", "維持運轉",
+            f"持續，至 THI 連續 2 小時 < {79 if max(thi, peak6) >= 79 else 74}", f"{on_now}/{FAN_COUNT} 台運轉中",
+            f"THI {thi:.1f}（{A.LEVEL_NAME[lvl]}），未來 6 小時預測最高 {peak6:.1f}；現場已有 {on_now} 台運轉，不需再次下令",
+            plan["說明"], "低", tr, bool(fan_eff.get("verified")), "—", priority=3, noop=True))
+    elif fans:
         hrs = FAN_HOLD_H
         decs.append(decision(
             name, "風扇-03／04／07／08", "開啟",
@@ -270,8 +290,9 @@ def build_sheep(site, ctx):
             "THI 讀值不可信 → 改用平均溫濕度重算 THI；溫濕度也失效 → 依時段排程 10–17 時全開",
             cost=f"約 NT${fans*FAN_KW*hrs*PRICE:.0f}（{fans} 台×{FAN_KW}kW×{hrs}h，電價假設 NT${PRICE}/kWh）",
             priority=1 if lvl >= 2 else 2))
+        # 這段高溫從什麼時候開始：同一段高溫內核准過一次，之後同樣的建議沿用該次核准（見 backend/loop.carry_over）
+        decs[-1]["事件開始"] = episode_start(site["clean"]["thi"])
     # 解除條件：現場風扇開著、THI 已連續 2 小時低於 73.5（74 再減遲滯 0.5）→ 建議關閉
-    on_now = int((site["raw"][F.FANS].iloc[-1] == 1).sum()) if set(F.FANS) <= set(site["raw"].columns) else 0
     thi2 = site["clean"]["thi"].iloc[-2:]
     if not fans and on_now and len(thi2) == 2 and bool((thi2 < 73.5).all()):
         decs.append(decision(name, "風扇-03／04／07／08", "關閉", "立即", f"0/{FAN_COUNT} 台",

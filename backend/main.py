@@ -139,7 +139,8 @@ def check_site(site_id):
 
 def with_review_status(snap):
     # 人員回饋接回決策：常被駁回的規則（審核 ≥3 次、駁回率 ≥50%）自動降回人工確認並註明原因
-    flags = loop.review_flags(db().reviews(snap["site_id"], 10000), snap["site_id"], str(snap["at"])[:16])
+    revs = db().reviews(snap["site_id"], 10000)
+    flags = loop.review_flags(revs, snap["site_id"], str(snap["at"])[:16])
     for d in snap["decisions"]:
         f = flags.get(d["設備"])
         if f and d["執行模式"] in ("自動執行", "人工確認"):
@@ -152,6 +153,11 @@ def with_review_status(snap):
     for d in snap["decisions"]:
         rv = db().latest_review(d["id"])
         d["審核"] = None if rv is None else {"action": rv["action"], "operator": rv["operator"], "at": rv["created_at"]}
+        # 同一建議沿用先前的核准／駁回，不必每小時重新按（這一筆自己被審核過就以這筆為準）
+        if rv is None and d["執行模式"] == "人工確認":
+            c = loop.carry_over(revs, d, snap["site_id"], str(snap["at"])[:16])
+            if c:
+                d["延續"] = c
         d["控制指令"] = control.plan(d["site_id"], d)
     for w in snap["work_orders"]:
         w["狀態"] = db().wo_status(w["id"])
@@ -178,12 +184,13 @@ def health():
 def list_sites(at: Optional[str] = Query(None, description=AT_DOC + "（超出某場域資料範圍時，該場域自動用最接近的時間）"), user: dict = Depends(current_user)):
     out = []
     for sid in SITES:
-        s = eng().snapshot(sid, at)
+        s = with_review_status(copy.deepcopy(eng().snapshot(sid, at)))
         st = s["status"]
         out.append({"site_id": sid, "name": s["name"], "domain": s["domain"], "at": s["at"], "range": s["range"],
                     "指數": st["指數"], "數值": st["數值"], "等級": st["等級"], "等級碼": st["等級碼"],
                     "感測可信度": st["感測可信度"], "決策數": len(s["decisions"]), "工單數": len(s["work_orders"]),
-                    "待人工確認": sum(1 for d in s["decisions"] if d["執行模式"] == "人工確認")})
+                    "待人工確認": sum(1 for d in s["decisions"]
+                                     if d["執行模式"] == "人工確認" and not d.get("審核") and not d.get("延續"))})
     return out
 
 

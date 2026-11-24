@@ -86,7 +86,8 @@ export function SitePage({ siteId, initialAt, onAtChange }: Props) {
     s.diagnoses.filter((d) => !oldDiag.has(d.問題)).slice(0, 2).forEach((d) => push('info', `${at} 新診斷`, d.問題))
     const key = (d: Decision) => d.設備 + d.動作.replace(/[0-9.]+%?/g, '')
     const oldDec = new Set(prev.decisions.map(key))
-    const fresh = s.decisions.filter((d) => !oldDec.has(key(d)) && !/維持|待命/.test(d.動作))
+    // 沿用先前核准、或駁回後冷卻中的建議不再跳通知，也不會讓播放暫停
+    const fresh = s.decisions.filter((d) => !oldDec.has(key(d)) && !/維持|待命/.test(d.動作) && !d.延續)
     fresh.forEach((d) => {
       if (d.執行模式 === '人工確認') push('action', `${at} 新決策待核准`, `${d.設備}：${d.動作}`)
       else if (d.執行模式 === '自動執行' && d.控制指令?.類型 === '設備指令') push('info', `${at} 系統自動下發`, `${d.設備}：${d.動作}`)

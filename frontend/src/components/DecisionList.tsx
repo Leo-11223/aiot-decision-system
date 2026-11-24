@@ -125,6 +125,13 @@ export function DecisionList({ decisions, onReview, replay = false }: Props) {
                 </button>
               </div>
             )}
+            {d.延續 && !d.審核 && (
+              <span className={'note ' + (d.延續.類型 === '延續核准' ? 'ok' : 'bad')}>
+                {d.延續.類型 === '延續核准'
+                  ? `沿用 ${d.延續.依據時間.replace('T', ' ').slice(5, 16)} 的核准（${d.延續.操作人 ?? '—'}），同一段事件內不需重按；${d.延續.到期.replace('T', ' ').slice(5, 16)} 前有效`
+                  : `已於 ${d.延續.依據時間.replace('T', ' ').slice(5, 16)} 駁回（${d.延續.操作人 ?? '—'}${d.延續.原因 ? '：' + d.延續.原因 : ''}），${d.延續.到期.replace('T', ' ').slice(5, 16)} 前不再提醒`}
+              </span>
+            )}
             {(d.執行模式 === '人工確認' || d.執行模式 === 'Fallback') && d.審核 && (
               <span className={'note ' + (d.審核.action === 'approve' ? 'ok' : 'bad')}>
                 {d.審核.action === 'approve' ? '已核准' : '已駁回'}（{d.審核.operator ?? '—'}，{d.審核.at.replace('T', ' ').slice(5, 16)}）
